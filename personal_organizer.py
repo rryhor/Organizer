@@ -1,1413 +1,1333 @@
-# Персональный органайзер - скелет приложения на Python + Tkinter (ttk)
-# Часть 1: Базовая структура интерфейса, классы-обёртки для полей ввода, модель данных
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Персональный органайзер-планировщик
+Полная реализация согласно спецификации из organizer_interface_schemas.docx и .md
+"""
 
 import tkinter as tk
-from tkinter import ttk
-from datetime import datetime, timedelta
+from tkinter import ttk, filedialog, messagebox
 import json
 import os
+from datetime import datetime, timedelta
+import subprocess
 
-# Попытка импорта tkcalendar (может отсутствовать в стандартной установке)
-try:
-    from tkcalendar import Calendar
-except ImportError:
-    Calendar = None
+DATA_FILE = "organizer_data.json"
 
 
-class EnhancedEntry(ttk.Entry):
-    """
-    Класс-обёртка над ttk.Entry с глобальной привязкой горячих клавиш:
-    Ctrl+C - копировать, Ctrl+V - вставить, Ctrl+X - вырезать, Ctrl+A - выделить всё.
-    Работает глобально во всех полях этого типа в приложении.
-    """
-    
-    def __init__(self, master=None, **kwargs):
-        super().__init__(master, **kwargs)
-        # Привязываем горячие клавиши к виджету
-        self.bind('<Control-c>', self._copy)
-        self.bind('<Control-v>', self._paste)
-        self.bind('<Control-x>', self._cut)
-        self.bind('<Control-a>', self._select_all)
-    
-    def _copy(self, event=None):
-        """Копирует выделенный текст в буфер обмена."""
-        try:
-            self.clipboard_clear()
-            self.clipboard_append(self.selection_get())
-        except tk.TclError:
-            pass  # Нет выделенного текста
-        return 'break'
-    
-    def _paste(self, event=None):
-        """Вставляет текст из буфера обмена."""
-        try:
-            text = self.clipboard_get()
-            self.insert(tk.INSERT, text)
-        except tk.TclError:
-            pass  # Буфер обмена пуст или недоступен
-        return 'break'
-    
-    def _cut(self, event=None):
-        """Вырезает выделенный текст (копирует и удаляет)."""
-        try:
-            text = self.selection_get()
-            self.clipboard_clear()
-            self.clipboard_append(text)
-            self.delete(tk.SEL_FIRST, tk.SEL_LAST)
-        except tk.TclError:
-            pass  # Нет выделенного текста
-        return 'break'
-    
-    def _select_all(self, event=None):
-        """Выделяет весь текст в поле."""
-        self.select_range(0, tk.END)
-        self.icursor(tk.END)
-        return 'break'
-
-
-class EnhancedText(tk.Text):
-    """
-    Класс-обёртка над tk.Text с глобальной привязкой горячих клавиш:
-    Ctrl+C - копировать, Ctrl+V - вставить, Ctrl+X - вырезать, Ctrl+A - выделить всё.
-    Работает глобально во всех текстовых полях этого типа в приложении.
-    """
-    
-    def __init__(self, master=None, **kwargs):
-        super().__init__(master, **kwargs)
-        # Привязываем горячие клавиши к виджету
-        self.bind('<Control-c>', self._copy)
-        self.bind('<Control-v>', self._paste)
-        self.bind('<Control-x>', self._cut)
-        self.bind('<Control-a>', self._select_all)
-    
-    def _copy(self, event=None):
-        """Копирует выделенный текст в буфер обмена."""
-        try:
-            self.clipboard_clear()
-            self.clipboard_append(self.selection_get())
-        except tk.TclError:
-            pass  # Нет выделенного текста
-        return 'break'
-    
-    def _paste(self, event=None):
-        """Вставляет текст из буфера обмена."""
-        try:
-            text = self.clipboard_get()
-            self.insert(tk.INSERT, text)
-        except tk.TclError:
-            pass  # Буфер обмена пуст или недоступен
-        return 'break'
-    
-    def _cut(self, event=None):
-        """Вырезает выделенный текст (копирует и удаляет)."""
-        try:
-            text = self.selection_get()
-            self.clipboard_clear()
-            self.clipboard_append(text)
-            self.delete(tk.SEL_FIRST, tk.SEL_LAST)
-        except tk.TclError:
-            pass  # Нет выделенного текста
-        return 'break'
-    
-    def _select_all(self, event=None):
-        """Выделяет весь текст в поле."""
-        self.tag_add(tk.SEL, '1.0', tk.END)
-        self.mark_set(tk.INSERT, '1.0')
-        self.see(tk.INSERT)
-        return 'break'
-
-
-class Task:
-    """
-    Класс модели задачи со всеми необходимыми полями.
-    Используется для хранения и сериализации данных о задачах.
-    """
-    
-    def __init__(self, id=None, title="", task_type="Обычная", due_date=None, 
-                 description="", completed=False, notified=False, 
-                 reminder_minutes=0, subtasks=None):
-        """
-        Инициализация задачи с параметрами по умолчанию.
+class TaskOrganizer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("ОРГАНАЙЗЕР-ПЛАНИРОВЩИК")
+        self.root.geometry("1200x800")
         
-        Args:
-            id: Уникальный идентификатор задачи (int)
-            title: Заголовок задачи (str)
-            task_type: Тип задачи (str) - "Обычная", "Встреча", "Звонок" и т.д.
-            due_date: Дата выполнения (datetime или str в формате YYYY-MM-DD)
-            description: Подробное описание задачи (str)
-            completed: Флаг выполнения (bool)
-            notified: Флаг уведомления (bool)
-            reminder_minutes: Время напоминания в минутах до события (int)
-            subtasks: Список подзадач (list)
-        """
-        self.id = id if id is not None else int(datetime.now().timestamp())
-        self.title = title
-        self.task_type = task_type
-        # Обработка даты: может быть строкой или datetime объектом
-        if isinstance(due_date, str) and due_date:
-            try:
-                self.due_date = datetime.strptime(due_date, "%Y-%m-%d")
-            except ValueError:
-                self.due_date = None
-        elif isinstance(due_date, datetime):
-            self.due_date = due_date
-        else:
-            self.due_date = None
-        self.description = description
-        self.completed = completed
-        self.notified = notified
-        self.reminder_minutes = reminder_minutes
-        self.subtasks = subtasks if subtasks is not None else []
-    
-    def to_dict(self):
-        """
-        Преобразует объект Task в словарь для JSON-сериализации.
-        
-        Returns:
-            dict: Словарь с данными задачи
-        """
-        return {
-            'id': self.id,
-            'title': self.title,
-            'task_type': self.task_type,
-            'due_date': self.due_date.strftime("%Y-%m-%d") if self.due_date else None,
-            'description': self.description,
-            'completed': self.completed,
-            'notified': self.notified,
-            'reminder_minutes': self.reminder_minutes,
-            'subtasks': self.subtasks
+        # Данные
+        self.tasks = []
+        self.templates = []
+        self.settings = {
+            "language": "Russian",
+            "theme": "Light",
+            "week_start": "Monday",
+            "date_format": "%d.%m.%Y",
+            "time_format": "24h",
+            "notifications_enabled": True,
+            "reminder_before": 30,
+            "sound_notifications": True,
+            "popup_notifications": True,
+            "eisenhower_matrix": True,
+            "pomodoro_enabled": False,
+            "pomodoro_focus": 25,
+            "pomodoro_break": 5
         }
-    
-    @classmethod
-    def from_dict(cls, data):
-        """
-        Создаёт объект Task из словаря (при загрузке из JSON).
         
-        Args:
-            data: dict с данными задачи
-            
-        Returns:
-            Task: Новый объект задачи
-        """
-        return cls(
-            id=data.get('id'),
-            title=data.get('title', ''),
-            task_type=data.get('task_type', 'Обычная'),
-            due_date=data.get('due_date'),
-            description=data.get('description', ''),
-            completed=data.get('completed', False),
-            notified=data.get('notified', False),
-            reminder_minutes=data.get('reminder_minutes', 0),
-            subtasks=data.get('subtasks', [])
-        )
-    
-    def get_status_group(self):
-        """
-        Определяет группу задачи для отображения в дереве.
+        self.load_data()
+        self.setup_ui()
+        self.refresh_task_tree()
+        self.update_status_bar()
         
-        Returns:
-            str: Название группы ("Сегодня", "Скоро", "Позже", "Просрочено", "Выполнено")
-        """
-        if self.completed:
-            return "Выполнено"
-        
-        if self.due_date is None:
-            return "Позже"
-        
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        due = self.due_date.replace(hour=0, minute=0, second=0, microsecond=0) if isinstance(self.due_date, datetime) else datetime.strptime(self.due_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        if due < today:
-            return "Просрочено"
-        elif due == today:
-            return "Сегодня"
-        elif due <= today + timedelta(days=7):
-            return "Скоро"
+    def load_data(self):
+        """Загрузка данных из JSON файла"""
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.tasks = data.get('tasks', [])
+                    self.templates = data.get('templates', self.get_default_templates())
+                    self.settings.update(data.get('settings', {}))
+            except Exception as e:
+                print(f"Ошибка загрузки данных: {e}")
+                self.templates = self.get_default_templates()
         else:
-            return "Позже"
-
-
-class AddTaskDialog:
-    """
-    Модальный диалог для создания и редактирования задач.
-    Окно 500x600 с полями: тип задачи, название, описание, дата, время, напоминание.
-    Поддерживает режим создания новой задачи и режим редактирования существующей.
-    Все поля Entry/Text используют EnhancedEntry/EnhancedText для поддержки Ctrl+C/V/X/A.
-    """
+            self.templates = self.get_default_templates()
     
-    def __init__(self, parent, task=None, on_save=None):
-        """
-        Инициализация диалога создания/редактирования задачи.
-        
-        Args:
-            parent: Родительское окно (для модальности)
-            task: Объект Task для редактирования (None для создания новой)
-            on_save: Callback-функция, вызываемая при успешном сохранении
-        """
-        self.parent = parent
-        self.task = task  # Задача для редактирования или None
-        self.on_save = on_save  # Функция обратного вызова после сохранения
-        self.result = None  # Результат диалога (сохранённая задача или None)
-        
-        # Создание модального окна
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Добавление задачи" if task is None else "Редактирование задачи")
-        self.dialog.geometry("500x600")
-        self.dialog.minsize(450, 550)
-        self.dialog.transient(parent)  # Сделать окном верхнего уровня относительно parent
-        self.dialog.grab_set()  # Модальность - перехват всех событий
-        
-        # Центрирование окна относительно родителя
-        self.dialog.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - 500) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - 600) // 2
-        self.dialog.geometry(f"+{x}+{y}")
-        
-        # Переменная для хранения результата
-        self.saved = False
-        
-        # Создание интерфейса диалога
-        self._create_ui()
-        
-        # Если передана задача для редактирования - заполнить поля
-        if self.task is not None:
-            self._fill_from_task()
-        
-        # Привязка клавиши Enter для сохранения
-        self.dialog.bind('<Return>', lambda e: self._on_save())
-        # Привязка Escape для отмены
-        self.dialog.bind('<Escape>', lambda e: self.dialog.destroy())
+    def save_data(self):
+        """Сохранение данных в JSON файл"""
+        data = {
+            'tasks': self.tasks,
+            'templates': self.templates,
+            'settings': self.settings
+        }
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     
-    def _create_ui(self):
-        """
-        Создание интерфейса диалога.
-        Включает все поля ввода, календарь, spinbox времени и напоминания, кнопки.
-        """
-        # Основной фрейм с отступами
-        main_frame = ttk.Frame(self.dialog, padding=15)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # === Поле "Тип задачи" ===
-        type_frame = ttk.Frame(main_frame)
-        type_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(type_frame, text="Тип задачи:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.type_combo = ttk.Combobox(type_frame, values=[
-            "Встреча", "Мероприятие", "Документы", "Срок сдачи", "Другое"
-        ], state="readonly", width=30)
-        self.type_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.type_combo.set("Другое")  # Значение по умолчанию
-        
-        # === Поле "Название" (EnhancedEntry) ===
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(title_frame, text="Название:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.title_entry = EnhancedEntry(title_frame, width=40)
-        self.title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
-        # === Поле "Описание" (EnhancedText, 4 строки) ===
-        desc_label = ttk.Label(main_frame, text="Описание:")
-        desc_label.pack(anchor=tk.W, pady=(5, 0))
-        self.desc_text = EnhancedText(main_frame, height=4, wrap=tk.WORD)
-        self.desc_text.pack(fill=tk.X, pady=(0, 10))
-        # Добавляем скроллбар для текста
-        desc_scrollbar = ttk.Scrollbar(self.desc_text, orient=tk.VERTICAL, command=self.desc_text.yview)
-        desc_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.desc_text.configure(yscrollcommand=desc_scrollbar.set)
-        
-        # === Календарь (tkcalendar.Calendar) ===
-        cal_label = ttk.Label(main_frame, text="Дата выполнения:")
-        cal_label.pack(anchor=tk.W, pady=(5, 0))
-        
-        if Calendar is not None:
-            # Используем tkcalendar.Calendar
-            self.calendar = Calendar(main_frame, selectmode='day', 
-                                     date_pattern='yyyy-mm-dd', locale='ru_RU')
-            self.calendar.pack(fill=tk.X, pady=(0, 10))
-            # Установка текущей даты по умолчанию
-            self.calendar.selection_clear()
-            today = datetime.now()
-            self.calendar.select_date(today)
-        else:
-            # Fallback: поле ввода даты вручную
-            self.date_entry = EnhancedEntry(main_frame, width=20)
-            self.date_entry.pack(pady=(0, 10))
-            self.date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
-            ttk.Label(main_frame, text="(в формате ГГГГ-ММ-ДД)", foreground='gray').pack(anchor=tk.W)
-        
-        # === Spinbox часов (0-23) и минут (0-59) ===
-        time_frame = ttk.Frame(main_frame)
-        time_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(time_frame, text="Время:").pack(side=tk.LEFT)
-        
-        # Часы
-        ttk.Label(time_frame, text="Часы:").pack(side=tk.LEFT, padx=(15, 5))
-        self.hour_spinbox = ttk.Spinbox(time_frame, from_=0, to=23, width=5, 
-                                        format="%02.0f", command=self._validate_time)
-        self.hour_spinbox.pack(side=tk.LEFT)
-        self.hour_spinbox.set(12)  # Полдень по умолчанию
-        
-        # Минуты
-        ttk.Label(time_frame, text="Минуты:").pack(side=tk.LEFT, padx=(10, 5))
-        self.minute_spinbox = ttk.Spinbox(time_frame, from_=0, to=59, width=5, 
-                                          format="%02.0f", command=self._validate_time)
-        self.minute_spinbox.pack(side=tk.LEFT)
-        self.minute_spinbox.set(0)
-        
-        # === Поле "Напомнить за (минут)" (Spinbox, 5-1440, шаг 5) ===
-        reminder_frame = ttk.Frame(main_frame)
-        reminder_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(reminder_frame, text="Напомнить за:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.reminder_spinbox = ttk.Spinbox(reminder_frame, from_=5, to=1440, width=10, 
-                                            increment=5, command=self._validate_reminder)
-        self.reminder_spinbox.pack(side=tk.LEFT, padx=5)
-        self.reminder_spinbox.set(15)  # 15 минут по умолчанию
-        ttk.Label(reminder_frame, text="минут до события").pack(side=tk.LEFT)
-        
-        # === Разделитель ===
-        separator = ttk.Separator(main_frame, orient=tk.HORIZONTAL)
-        separator.pack(fill=tk.X, pady=15)
-        
-        # === Кнопки "Сохранить" / "Отмена" ===
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        # Кнопка Сохранить
-        self.save_btn = ttk.Button(btn_frame, text="Сохранить", command=self._on_save)
-        self.save_btn.pack(side=tk.RIGHT, padx=5)
-        
-        # Кнопка Отмена
-        cancel_btn = ttk.Button(btn_frame, text="Отмена", command=self.dialog.destroy)
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
+    def get_default_templates(self):
+        """Шаблоны по умолчанию"""
+        return [
+            {"id": 1, "name": "Еженедельный отчет", "category": "Работа", 
+             "description": "Подготовка еженедельного отчета",
+             "subtasks": [{"title": "Собрать данные", "importance": 4, "urgency": 3},
+                         {"title": "Написать отчет", "importance": 5, "urgency": 4},
+                         {"title": "Отправить руководству", "importance": 5, "urgency": 5}]},
+            {"id": 2, "name": "Запуск проекта", "category": "Проекты",
+             "description": "Шаблон для запуска нового проекта",
+             "subtasks": [{"title": "Анализ требований", "importance": 5, "urgency": 4},
+                         {"title": "Планирование", "importance": 4, "urgency": 3},
+                         {"title": "Реализация", "importance": 4, "urgency": 4},
+                         {"title": "Тестирование", "importance": 5, "urgency": 4},
+                         {"title": "Релиз", "importance": 5, "urgency": 5}]},
+            {"id": 3, "name": "Встреча с клиентом", "category": "Работа",
+             "description": "Подготовка и проведение встречи",
+             "subtasks": [{"title": "Подготовить презентацию", "importance": 4, "urgency": 4},
+                         {"title": "Согласовать время", "importance": 3, "urgency": 3},
+                         {"title": "Провести встречу", "importance": 5, "urgency": 4},
+                         {"title": "Отправить итоги", "importance": 4, "urgency": 3}]},
+            {"id": 4, "name": "Ревью кода", "category": "Разработка",
+             "description": "Проверка кода коллеги",
+             "subtasks": [{"title": "Изучить изменения", "importance": 4, "urgency": 3},
+                         {"title": "Найти проблемы", "importance": 5, "urgency": 3},
+                         {"title": "Оставить комментарии", "importance": 4, "urgency": 3},
+                         {"title": "Проверить исправления", "importance": 4, "urgency": 3}]},
+            {"id": 5, "name": "Планирование спринта", "category": "Разработка",
+             "description": "Планирование задач на спринт",
+             "subtasks": [{"title": "Обзор бэклога", "importance": 4, "urgency": 3},
+                         {"title": "Оценка задач", "importance": 4, "urgency": 3},
+                         {"title": "Распределение задач", "importance": 5, "urgency": 4},
+                         {"title": "Фиксация плана", "importance": 4, "urgency": 4}]},
+            {"id": 6, "name": "Обработка почты", "category": "Рутина",
+             "description": "Ежедневная обработка электронной почты",
+             "subtasks": [{"title": "Просмотреть входящие", "importance": 3, "urgency": 3},
+                         {"title": "Ответить на срочные", "importance": 4, "urgency": 4},
+                         {"title": "Отсортировать остальные", "importance": 2, "urgency": 2},
+                         {"title": "Архивировать", "importance": 2, "urgency": 1}]}
+        ]
     
-    def _fill_from_task(self):
-        """
-        Заполнение полей диалога данными из объекта Task (режим редактирования).
-        Извлекает все данные задачи и устанавливает их в соответствующие поля.
-        """
-        if self.task is None:
+    def setup_ui(self):
+        """Настройка пользовательского интерфейса"""
+        # Главное меню
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Сохранить", command=self.save_data)
+        file_menu.add_separator()
+        file_menu.add_command(label="Выход", command=self.root.quit)
+        menubar.add_cascade(label="Файл", menu=file_menu)
+        
+        task_menu = tk.Menu(menubar, tearoff=0)
+        task_menu.add_command(label="Добавить задачу", command=self.open_add_task_dialog, accelerator="Ctrl+N")
+        task_menu.add_command(label="Редактировать задачу", command=self.edit_selected_task, accelerator="Ctrl+E")
+        task_menu.add_command(label="Удалить задачу", command=self.delete_selected_task, accelerator="Delete")
+        menubar.add_cascade(label="Задача", menu=task_menu)
+        
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Сегодня", command=self.open_today_view)
+        view_menu.add_command(label="В ближайшее время", command=self.open_soon_view)
+        view_menu.add_command(label="Срочные", command=self.open_urgent_view)
+        view_menu.add_command(label="Несрочные", command=self.open_non_urgent_view)
+        view_menu.add_command(label="Матрица Эйзенхауэра", command=self.open_eisenhower_matrix)
+        menubar.add_cascade(label="Вид", menu=view_menu)
+        
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        tools_menu.add_command(label="Шаблоны", command=self.open_templates_window)
+        menubar.add_cascade(label="Инструменты", menu=tools_menu)
+        
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_command(label="Настройки", command=self.open_settings_window)
+        menubar.add_cascade(label="Настройки", menu=settings_menu)
+        
+        # Панель инструментов
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(toolbar, text="+ Добавить", command=self.open_add_task_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="✏ Редакт.", command=self.edit_selected_task).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🗑 Удалить", command=self.delete_selected_task).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="📋 Шаблоны", command=self.open_templates_window).pack(side=tk.LEFT, padx=2)
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', self.filter_tasks)
+        search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=30)
+        search_entry.pack(side=tk.RIGHT, padx=5)
+        ttk.Label(toolbar, text="🔍 Поиск:").pack(side=tk.RIGHT)
+        
+        # Основная панель
+        main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Левая панель - Навигация и дерево задач
+        left_frame = ttk.Frame(main_paned)
+        main_paned.add(left_frame, weight=1)
+        
+        # Навигация
+        nav_frame = ttk.LabelFrame(left_frame, text="НАВИГАЦИЯ")
+        nav_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        nav_buttons = [
+            ("📅 Сегодня", self.open_today_view),
+            ("⏰ В ближайшее время", self.open_soon_view),
+            ("🔴 Срочные", self.open_urgent_view),
+            ("🟢 Несрочные", self.open_non_urgent_view),
+            ("📊 По приоритету", self.open_priority_view),
+        ]
+        for text, cmd in nav_buttons:
+            ttk.Button(nav_frame, text=text, command=cmd).pack(fill=tk.X, padx=2, pady=1)
+        
+        # Дерево задач
+        tree_frame = ttk.LabelFrame(left_frame, text="ДЕРЕВО ЗАДАЧ")
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        columns = ('status', 'priority')
+        self.task_tree = ttk.Treeview(tree_frame, columns=columns, show='tree headings')
+        self.task_tree.heading('#0', text='Задача')
+        self.task_tree.heading('status', text='Статус')
+        self.task_tree.heading('priority', text='Приоритет')
+        self.task_tree.column('#0', width=300)
+        self.task_tree.column('status', width=80)
+        self.task_tree.column('priority', width=80)
+        
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.task_tree.yview)
+        self.task_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.task_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.task_tree.bind('<Double-1>', lambda e: self.edit_selected_task())
+        self.task_tree.bind('<Delete>', lambda e: self.delete_selected_task())
+        
+        # Правая панель - Детали задачи
+        details_frame = ttk.LabelFrame(main_paned, text="ДЕТАЛИ ЗАДАЧИ")
+        main_paned.add(details_frame, weight=1)
+        
+        ttk.Label(details_frame, text="Название:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.detail_name = ttk.Entry(details_frame, state='readonly')
+        self.detail_name.pack(fill=tk.X, padx=5, pady=2)
+        
+        ttk.Label(details_frame, text="Статус:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.detail_status = ttk.Combobox(details_frame, values=["Не начата", "В процессе", "Завершена", "Отложена"], state='readonly')
+        self.detail_status.pack(fill=tk.X, padx=5, pady=2)
+        self.detail_status.bind('<<ComboboxSelected>>', self.update_task_from_details)
+        
+        ttk.Label(details_frame, text="Приоритет (Важность/Срочность):").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.detail_priority = ttk.Label(details_frame, text="-/-")
+        self.detail_priority.pack(anchor=tk.W, padx=5, pady=2)
+        
+        ttk.Label(details_frame, text="Дедлайн:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.detail_deadline = ttk.Label(details_frame, text="-")
+        self.detail_deadline.pack(anchor=tk.W, padx=5, pady=2)
+        
+        ttk.Label(details_frame, text="Периодичность:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.detail_recurrence = ttk.Label(details_frame, text="Нет")
+        self.detail_recurrence.pack(anchor=tk.W, padx=5, pady=2)
+        
+        ttk.Label(details_frame, text="Описание:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.detail_description = tk.Text(details_frame, height=6, state='disabled')
+        self.detail_description.pack(fill=tk.X, padx=5, pady=2)
+        
+        files_frame = ttk.Frame(details_frame)
+        files_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(files_frame, text="📎 Файлы:").pack(anchor=tk.W)
+        self.detail_files = ttk.Treeview(files_frame, height=4)
+        self.detail_files.pack(fill=tk.X, pady=2)
+        ttk.Button(files_frame, text="Открыть файл", command=self.open_selected_file).pack(anchor=tk.W, pady=2)
+        
+        self.task_tree.bind('<<TreeviewSelect>>', self.on_task_select)
+        
+        # Статусная строка
+        self.status_bar = ttk.Label(self.root, text="Готово", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # Горячие клавиши
+        self.root.bind('<Control-n>', lambda e: self.open_add_task_dialog())
+        self.root.bind('<Control-e>', lambda e: self.edit_selected_task())
+        self.root.bind('<Control-s>', lambda e: self.save_data())
+        
+    def refresh_task_tree(self, tasks=None):
+        """Обновление дерева задач"""
+        if tasks is None:
+            tasks = self.tasks
+        
+        for item in self.task_tree.get_children():
+            self.task_tree.delete(item)
+        
+        status_map = {"Не начата": "○", "В процессе": "◐", "Завершена": "●", "Отложена": "⏸"}
+        
+        def add_tasks_to_tree(parent_tasks, parent_id=''):
+            for task in parent_tasks:
+                status_icon = status_map.get(task.get('status', 'Не начата'), '○')
+                priority_text = f"{task.get('importance', 0)}/{task.get('urgency', 0)}"
+                
+                tree_id = self.task_tree.insert(parent_id, 'end', text=f"{status_icon} {task['title']}",
+                                                values=(task.get('status', ''), priority_text),
+                                                tags=(str(task.get('id', '')),))
+                
+                if 'subtasks' in task and task['subtasks']:
+                    add_tasks_to_tree(task['subtasks'], tree_id)
+        
+        add_tasks_to_tree(tasks)
+    
+    def filter_tasks(self, *args):
+        """Фильтрация задач по поиску"""
+        search_term = self.search_var.get().lower()
+        if not search_term:
+            self.refresh_task_tree()
             return
         
-        # Тип задачи
-        if self.task.task_type in ["Встреча", "Мероприятие", "Документы", "Срок сдачи", "Другое"]:
-            self.type_combo.set(self.task.task_type)
-        else:
-            self.type_combo.set("Другое")
+        def filter_recursive(tasks):
+            result = []
+            for task in tasks:
+                if search_term in task.get('title', '').lower() or search_term in task.get('description', '').lower():
+                    result.append(task)
+                elif 'subtasks' in task:
+                    filtered_sub = filter_recursive(task['subtasks'])
+                    if filtered_sub:
+                        task_copy = task.copy()
+                        task_copy['subtasks'] = filtered_sub
+                        result.append(task_copy)
+            return result
+        
+        filtered = filter_recursive(self.tasks)
+        self.refresh_task_tree(filtered)
+    
+    def on_task_select(self, event=None):
+        """Обработка выбора задачи"""
+        selection = self.task_tree.selection()
+        if not selection:
+            self.clear_details()
+            return
+        
+        item_id = selection[0]
+        task = self.find_task_by_tree_id(item_id)
+        
+        if task:
+            self.detail_name.config(state='normal')
+            self.detail_name.delete(0, tk.END)
+            self.detail_name.insert(0, task.get('title', ''))
+            self.detail_name.config(state='readonly')
+            
+            self.detail_status.set(task.get('status', 'Не начата'))
+            
+            importance = task.get('importance', 0)
+            urgency = task.get('urgency', 0)
+            imp_str = "●" * importance + "○" * (5 - importance)
+            urg_str = "●" * urgency + "○" * (5 - urgency)
+            self.detail_priority.config(text=f"Важность: {imp_str}  Срочность: {urg_str}")
+            
+            deadline = task.get('deadline', '')
+            self.detail_deadline.config(text=deadline if deadline else "Не установлен")
+            
+            recurrence = task.get('recurrence', 'Нет')
+            self.detail_recurrence.config(text=recurrence)
+            
+            self.detail_description.config(state='normal')
+            self.detail_description.delete('1.0', tk.END)
+            self.detail_description.insert('1.0', task.get('description', ''))
+            self.detail_description.config(state='disabled')
+            
+            # Файлы
+            for item in self.detail_files.get_children():
+                self.detail_files.delete(item)
+            for f in task.get('files', []):
+                self.detail_files.insert('', 'end', text=os.path.basename(f), values=(f,))
+    
+    def find_task_by_tree_id(self, tree_id, tasks=None):
+        """Поиск задачи по ID в дереве"""
+        if tasks is None:
+            tasks = self.tasks
+        
+        for task in tasks:
+            if str(task.get('id', '')) in self.task_tree.item(tree_id, 'tags'):
+                return task
+            if 'subtasks' in task:
+                found = self.find_task_by_tree_id(tree_id, task['subtasks'])
+                if found:
+                    return found
+        return None
+    
+    def find_task_by_id(self, task_id, tasks=None):
+        """Поиск задачи по ID"""
+        if tasks is None:
+            tasks = self.tasks
+        
+        for task in tasks:
+            if task.get('id') == task_id:
+                return task, tasks
+            if 'subtasks' in task:
+                found, parent_list = self.find_task_by_id(task_id, task['subtasks'])
+                if found:
+                    return found, parent_list
+        return None, None
+    
+    def clear_details(self):
+        """Очистка панели деталей"""
+        self.detail_name.config(state='normal')
+        self.detail_name.delete(0, tk.END)
+        self.detail_name.config(state='readonly')
+        self.detail_status.set('')
+        self.detail_priority.config(text='-/-')
+        self.detail_deadline.config(text='-')
+        self.detail_recurrence.config(text='Нет')
+        self.detail_description.config(state='normal')
+        self.detail_description.delete('1.0', tk.END)
+        self.detail_description.config(state='disabled')
+        for item in self.detail_files.get_children():
+            self.detail_files.delete(item)
+    
+    def update_task_from_details(self, event=None):
+        """Обновление задачи из панели деталей"""
+        selection = self.task_tree.selection()
+        if not selection:
+            return
+        
+        item_id = selection[0]
+        task = self.find_task_by_tree_id(item_id)
+        
+        if task:
+            task['status'] = self.detail_status.get()
+            self.save_data()
+            self.refresh_task_tree()
+            self.update_status_bar()
+    
+    def update_status_bar(self):
+        """Обновление статусной строки"""
+        total = len(self.tasks)
+        completed = sum(1 for t in self.tasks if t.get('status') == 'Завершена')
+        in_progress = sum(1 for t in self.tasks if t.get('status') == 'В процессе')
+        pending = sum(1 for t in self.tasks if t.get('status') in ['Не начата', 'Отложена'])
+        
+        self.status_bar.config(text=f"Всего задач: {total} | Выполнено: {completed} | В работе: {in_progress} | Ожидание: {pending}")
+    
+    def get_next_id(self, tasks=None):
+        """Получение следующего ID"""
+        if tasks is None:
+            tasks = self.tasks
+        
+        max_id = 0
+        for task in tasks:
+            max_id = max(max_id, task.get('id', 0))
+            if 'subtasks' in task:
+                max_id = max(max_id, self.get_next_id(task['subtasks']) - 1)
+        return max_id + 1
+    
+    def open_add_task_dialog(self, parent_id=None, template=None):
+        """Открытие диалога добавления/редактирования задачи"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("ДОБАВЛЕНИЕ ЗАДАЧИ" if not template else "ИЗ ШАБЛОНА")
+        dialog.geometry("600x700")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        task_data = {}
+        if template:
+            task_data = template.copy()
         
         # Название
-        self.title_entry.delete(0, tk.END)
-        self.title_entry.insert(0, self.task.title)
+        ttk.Label(dialog, text="Название задачи:").pack(anchor=tk.W, padx=20, pady=(20,5))
+        name_entry = ttk.Entry(dialog, width=50)
+        name_entry.pack(padx=20, fill=tk.X)
+        if task_data.get('title'):
+            name_entry.insert(0, task_data['title'])
+        name_entry.focus()
+        
+        # Родительская задача
+        ttk.Label(dialog, text="Родительская задача:").pack(anchor=tk.W, padx=20, pady=(15,5))
+        parent_var = tk.StringVar()
+        parent_combo = ttk.Combobox(dialog, textvariable=parent_var, state='readonly')
+        parent_combo.pack(padx=20, fill=tk.X)
+        
+        parent_options = ["(Корень)"]
+        def collect_titles(tasks, level=0):
+            for task in tasks:
+                prefix = "  " * level
+                parent_options.append(f"{prefix}{task['title']} (ID:{task['id']})")
+                if 'subtasks' in task:
+                    collect_titles(task['subtasks'], level+1)
+        collect_titles(self.tasks)
+        parent_combo['values'] = parent_options
+        
+        if parent_id:
+            parent_task, _ = self.find_task_by_id(parent_id)
+            if parent_task:
+                parent_var.set(f"{parent_task['title']} (ID:{parent_task['id']})")
+        
+        # Статус
+        ttk.Label(dialog, text="Статус:").pack(anchor=tk.W, padx=20, pady=(15,5))
+        status_var = tk.StringVar(value=task_data.get('status', 'Не начата'))
+        status_frame = ttk.Frame(dialog)
+        status_frame.pack(padx=20, fill=tk.X)
+        for status in ["Не начата", "В процессе", "Завершена", "Отложена"]:
+            ttk.Radiobutton(status_frame, text=status, variable=status_var, value=status).pack(side=tk.LEFT, padx=10)
+        
+        # Приоритет
+        prio_frame = ttk.LabelFrame(dialog, text="Приоритет")
+        prio_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        ttk.Label(prio_frame, text="Важность:").pack(anchor=tk.W, padx=5, pady=5)
+        importance_scale = ttk.Scale(prio_frame, from_=1, to=5, orient=tk.HORIZONTAL, length=300)
+        importance_scale.set(task_data.get('importance', 3))
+        importance_scale.pack(padx=5)
+        imp_label = ttk.Label(prio_frame, text="3")
+        imp_label.pack()
+        importance_scale.bind('<Motion>', lambda e: imp_label.config(text=str(int(importance_scale.get()))))
+        
+        ttk.Label(prio_frame, text="Срочность:").pack(anchor=tk.W, padx=5, pady=5)
+        urgency_scale = ttk.Scale(prio_frame, from_=1, to=5, orient=tk.HORIZONTAL, length=300)
+        urgency_scale.set(task_data.get('urgency', 3))
+        urgency_scale.pack(padx=5)
+        urg_label = ttk.Label(prio_frame, text="3")
+        urg_label.pack()
+        urgency_scale.bind('<Motion>', lambda e: urg_label.config(text=str(int(urgency_scale.get()))))
+        
+        # Сроки
+        date_frame = ttk.LabelFrame(dialog, text="Сроки")
+        date_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        ttk.Label(date_frame, text="Дедлайн:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        deadline_entry = ttk.Entry(date_frame, width=30)
+        deadline_entry.grid(row=0, column=1, padx=5, pady=5)
+        if task_data.get('deadline'):
+            deadline_entry.insert(0, task_data['deadline'])
+        
+        ttk.Label(date_frame, text="Периодичность:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        recurrence_var = tk.StringVar(value=task_data.get('recurrence', 'Нет'))
+        recurrence_combo = ttk.Combobox(date_frame, textvariable=recurrence_var, 
+                                        values=["Нет", "Ежедневно", "Еженедельно", "Ежемесячно", "Ежегодно"])
+        recurrence_combo.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
         
         # Описание
-        self.desc_text.delete('1.0', tk.END)
-        self.desc_text.insert('1.0', self.task.description)
+        ttk.Label(dialog, text="Описание:").pack(anchor=tk.W, padx=20, pady=(15,5))
+        desc_text = tk.Text(dialog, height=8, width=60)
+        desc_text.pack(padx=20, fill=tk.X)
+        if task_data.get('description'):
+            desc_text.insert('1.0', task_data['description'])
         
-        # Дата и время
-        if self.task.due_date:
-            due_dt = self.task.due_date if isinstance(self.task.due_date, datetime) else \
-                     datetime.strptime(self.task.due_date, "%Y-%m-%d")
+        # Вложения
+        files_frame = ttk.LabelFrame(dialog, text="Вложения")
+        files_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        files_list = task_data.get('files', [])
+        
+        def add_file():
+            filename = filedialog.askopenfilename()
+            if filename:
+                files_list.append(filename)
+                update_files_list()
+        
+        def remove_file():
+            sel = files_listbox.curselection()
+            if sel:
+                del files_list[sel[0]]
+                update_files_list()
+        
+        def update_files_list():
+            files_listbox.delete(0, tk.END)
+            for f in files_list:
+                files_listbox.insert(tk.END, os.path.basename(f))
+        
+        ttk.Button(files_frame, text="📎 Добавить файл", command=add_file).pack(pady=5)
+        files_listbox = tk.Listbox(files_frame, height=4, width=50)
+        files_listbox.pack(pady=5)
+        ttk.Button(files_frame, text="Удалить файл", command=remove_file).pack(pady=5)
+        update_files_list()
+        
+        # Подзадачи из шаблона
+        if task_data.get('subtasks'):
+            sub_frame = ttk.LabelFrame(dialog, text="Подзадачи из шаблона")
+            sub_frame.pack(fill=tk.X, padx=20, pady=15)
             
-            if Calendar is not None:
-                self.calendar.select_date(due_dt)
-            else:
-                self.date_entry.delete(0, tk.END)
-                self.date_entry.insert(0, due_dt.strftime("%Y-%m-%d"))
+            for i, sub in enumerate(task_data['subtasks']):
+                ttk.Label(sub_frame, text=f"{i+1}. {sub.get('title', 'Подзадача')} (Важн: {sub.get('importance', 3)}, Сроч: {sub.get('urgency', 3)})").pack(anchor=tk.W, padx=5)
+        
+        # Кнопки
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=20)
+        
+        def save_task():
+            title = name_entry.get().strip()
+            if not title:
+                messagebox.showwarning("Предупреждение", "Введите название задачи!")
+                return
             
-            # Время
-            self.hour_spinbox.set(due_dt.hour)
-            self.minute_spinbox.set(due_dt.minute)
+            parent_text = parent_var.get()
+            target_list = self.tasks
+            
+            if parent_text and parent_text != "(Корень)":
+                import re
+                match = re.search(r'\(ID:(\d+)\)', parent_text)
+                if match:
+                    parent_id_val = int(match.group(1))
+                    parent_task, parent_list = self.find_task_by_id(parent_id_val)
+                    if parent_task:
+                        if 'subtasks' not in parent_task:
+                            parent_task['subtasks'] = []
+                        target_list = parent_task['subtasks']
+            
+            new_task = {
+                'id': self.get_next_id(),
+                'title': title,
+                'status': status_var.get(),
+                'importance': int(importance_scale.get()),
+                'urgency': int(urgency_scale.get()),
+                'deadline': deadline_entry.get().strip(),
+                'recurrence': recurrence_var.get(),
+                'description': desc_text.get('1.0', tk.END).strip(),
+                'files': files_list,
+                'subtasks': task_data.get('subtasks', [])
+            }
+            
+            target_list.append(new_task)
+            self.save_data()
+            self.refresh_task_tree()
+            self.update_status_bar()
+            dialog.destroy()
         
-        # Напоминание
-        if self.task.reminder_minutes and self.task.reminder_minutes >= 5:
-            self.reminder_spinbox.set(self.task.reminder_minutes)
-        else:
-            self.reminder_spinbox.set(15)
+        ttk.Button(btn_frame, text="Сохранить", command=save_task).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Отмена", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
     
-    def _validate_time(self):
-        """
-        Валидация введённого времени.
-        Проверяет корректность значений часов (0-23) и минут (0-59).
-        """
-        try:
-            hour = int(self.hour_spinbox.get())
-            minute = int(self.minute_spinbox.get())
-            if hour < 0 or hour > 23:
-                self.hour_spinbox.set(12)
-            if minute < 0 or minute > 59:
-                self.minute_spinbox.set(0)
-        except ValueError:
-            self.hour_spinbox.set(12)
-            self.minute_spinbox.set(0)
-    
-    def _validate_reminder(self):
-        """
-        Валидация значения напоминания.
-        Проверяет, что значение в диапазоне 5-1440 минут.
-        """
-        try:
-            reminder = int(self.reminder_spinbox.get())
-            if reminder < 5:
-                self.reminder_spinbox.set(5)
-            elif reminder > 1440:
-                self.reminder_spinbox.set(1440)
-        except ValueError:
-            self.reminder_spinbox.set(15)
-    
-    def _on_save(self):
-        """
-        Обработчик нажатия кнопки "Сохранить".
-        Выполняет валидацию полей, создаёт/обновляет объект Task и закрывает диалог.
-        """
-        # Валидация: название обязательно
-        title = self.title_entry.get().strip()
-        if not title:
-            # Показываем сообщение об ошибке
-            error_dialog = tk.Toplevel(self.dialog)
-            error_dialog.title("Ошибка")
-            error_dialog.geometry("300x100")
-            error_dialog.transient(self.dialog)
-            error_dialog.grab_set()
-            ttk.Label(error_dialog, text="Название задачи обязательно!", 
-                     foreground='red').pack(pady=20)
-            ttk.Button(error_dialog, text="OK", command=error_dialog.destroy).pack()
-            # Центрирование
-            error_dialog.update_idletasks()
-            x = self.dialog.winfo_x() + (500 - 300) // 2
-            y = self.dialog.winfo_y() + (600 - 100) // 2
-            error_dialog.geometry(f"+{x}+{y}")
+    def edit_selected_task(self):
+        """Редактирование выбранной задачи"""
+        selection = self.task_tree.selection()
+        if not selection:
+            messagebox.showinfo("Информация", "Выберите задачу для редактирования")
             return
         
-        # Валидация даты
-        try:
-            if Calendar is not None:
-                date_str = self.calendar.get_date()
-                due_date = datetime.strptime(date_str, "%Y-%m-%d")
-            else:
-                date_str = self.date_entry.get().strip()
-                due_date = datetime.strptime(date_str, "%Y-%m-%d")
-        except (ValueError, TypeError):
-            # Показываем сообщение об ошибке
-            error_dialog = tk.Toplevel(self.dialog)
-            error_dialog.title("Ошибка")
-            error_dialog.geometry("300x100")
-            error_dialog.transient(self.dialog)
-            error_dialog.grab_set()
-            ttk.Label(error_dialog, text="Некорректная дата!", foreground='red').pack(pady=20)
-            ttk.Button(error_dialog, text="OK", command=error_dialog.destroy).pack()
-            error_dialog.update_idletasks()
-            x = self.dialog.winfo_x() + (500 - 300) // 2
-            y = self.dialog.winfo_y() + (600 - 100) // 2
-            error_dialog.geometry(f"+{x}+{y}")
+        item_id = selection[0]
+        task = self.find_task_by_tree_id(item_id)
+        
+        if not task:
             return
         
-        # Сбор времени
-        try:
-            hour = int(self.hour_spinbox.get())
-            minute = int(self.minute_spinbox.get())
-            due_datetime = due_date.replace(hour=hour, minute=minute)
-        except ValueError:
-            due_datetime = due_date
-        
-        # Сбор данных
-        task_type = self.type_combo.get()
-        description = self.desc_text.get('1.0', tk.END).strip()
-        reminder_minutes = int(self.reminder_spinbox.get())
-        
-        # Создание или обновление объекта Task
-        if self.task is None:
-            # Создание новой задачи
-            new_task = Task(
-                id=int(datetime.now().timestamp()),
-                title=title,
-                task_type=task_type,
-                due_date=due_datetime,
-                description=description,
-                completed=False,
-                notified=False,
-                reminder_minutes=reminder_minutes,
-                subtasks=[]
-            )
-            self.result = new_task
-        else:
-            # Обновление существующей задачи
-            self.task.title = title
-            self.task.task_type = task_type
-            self.task.due_date = due_datetime
-            self.task.description = description
-            self.task.reminder_minutes = reminder_minutes
-            self.result = self.task
-        
-        # Помечаем как сохранённое и закрываем
-        self.saved = True
-        if self.on_save:
-            self.on_save(self.result)
-        self.dialog.destroy()
-    
-    def wait_for_result(self):
-        """
-        Ожидание закрытия диалога и возврат результата.
-        Блокирует выполнение до закрытия окна.
-        
-        Returns:
-            Task или None: Сохранённая задача или None если отменено
-        """
-        self.dialog.wait_window()
-        return self.result
-
-
-class SubtaskEditDialog:
-    """
-    Модальный диалог для создания и редактирования подзадач.
-    Окно 400x300 с полями: название, комментарий, чекбокс выполнения.
-    Все поля Entry/Text используют EnhancedEntry/EnhancedText для поддержки Ctrl+C/V/X/A.
-    """
-    
-    def __init__(self, parent, subtask=None, on_save=None):
-        """
-        Инициализация диалога создания/редактирования подзадачи.
-        
-        Args:
-            parent: Родительское окно (для модальности)
-            subtask: Словарь с данными подзадачи для редактирования (None для создания новой)
-            on_save: Callback-функция, вызываемая при успешном сохранении
-        """
-        self.parent = parent
-        self.subtask = subtask  # Подзадача для редактирования или None
-        self.on_save = on_save  # Функция обратного вызова после сохранения
-        self.result = None  # Результат диалога (сохранённая подзадача или None)
-        
-        # Создание модального окна
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Добавление подзадания" if subtask is None else "Редактирование подзадания")
-        self.dialog.geometry("400x300")
-        self.dialog.minsize(350, 250)
-        self.dialog.transient(parent)  # Сделать окном верхнего уровня относительно parent
-        self.dialog.grab_set()  # Модальность - перехват всех событий
-        
-        # Центрирование окна относительно родителя
-        self.dialog.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - 400) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - 300) // 2
-        self.dialog.geometry(f"+{x}+{y}")
-        
-        # Переменная для хранения результата
-        self.saved = False
-        
-        # Создание интерфейса диалога
-        self._create_ui()
-        
-        # Если передана подзадача для редактирования - заполнить поля
-        if self.subtask is not None:
-            self._fill_from_subtask()
-        
-        # Привязка клавиши Enter для сохранения
-        self.dialog.bind('<Return>', lambda e: self._on_save())
-        # Привязка Escape для отмены
-        self.dialog.bind('<Escape>', lambda e: self.dialog.destroy())
-    
-    def _create_ui(self):
-        """
-        Создание интерфейса диалога.
-        Включает все поля ввода: название, комментарий, чекбокс выполнения, кнопки.
-        """
-        # Основной фрейм с отступами
-        main_frame = ttk.Frame(self.dialog, padding=15)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # === Поле "Название" (EnhancedEntry) ===
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(title_frame, text="Название:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.title_entry = EnhancedEntry(title_frame, width=30)
-        self.title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
-        # === Поле "Комментарий" (EnhancedText) ===
-        comment_label = ttk.Label(main_frame, text="Комментарий:")
-        comment_label.pack(anchor=tk.W, pady=(5, 0))
-        self.comment_text = EnhancedText(main_frame, height=6, wrap=tk.WORD)
-        self.comment_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        # Добавляем скроллбар для текста
-        comment_scrollbar = ttk.Scrollbar(self.comment_text, orient=tk.VERTICAL, command=self.comment_text.yview)
-        comment_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.comment_text.configure(yscrollcommand=comment_scrollbar.set)
-        
-        # === Чекбокс "Выполнено" ===
-        self.completed_var = tk.BooleanVar(value=False)
-        self.completed_check = ttk.Checkbutton(main_frame, text="Выполнено", 
-                                                variable=self.completed_var)
-        self.completed_check.pack(anchor=tk.W, pady=(0, 15))
-        
-        # === Кнопки "Сохранить" / "Отмена" ===
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X)
-        
-        # Кнопка Сохранить
-        self.save_btn = ttk.Button(btn_frame, text="Сохранить", command=self._on_save)
-        self.save_btn.pack(side=tk.RIGHT, padx=5)
-        
-        # Кнопка Отмена
-        cancel_btn = ttk.Button(btn_frame, text="Отмена", command=self.dialog.destroy)
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
-    
-    def _fill_from_subtask(self):
-        """
-        Заполнение полей диалога данными из подзадачи (режим редактирования).
-        Извлекает все данные подзадачи и устанавливает их в соответствующие поля.
-        """
-        if self.subtask is None:
-            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("РЕДАКТИРОВАНИЕ ЗАДАЧИ")
+        dialog.geometry("600x700")
+        dialog.transient(self.root)
+        dialog.grab_set()
         
         # Название
-        self.title_entry.delete(0, tk.END)
-        self.title_entry.insert(0, self.subtask.get('title', ''))
-        
-        # Комментарий
-        self.comment_text.delete('1.0', tk.END)
-        self.comment_text.insert('1.0', self.subtask.get('comment', ''))
-        
-        # Выполнено
-        self.completed_var.set(self.subtask.get('completed', False))
-    
-    def _on_save(self):
-        """
-        Обработчик нажатия кнопки "Сохранить".
-        Выполняет валидацию полей и сохраняет результат.
-        Закрывает диалог после успешного сохранения.
-        """
-        # Валидация: название обязательно
-        title = self.title_entry.get().strip()
-        if not title:
-            # Визуальная индикация ошибки
-            self.title_entry.configure(style='Error.TEntry')
-            return
-        
-        # Сбор данных
-        comment = self.comment_text.get('1.0', tk.END).strip()
-        completed = self.completed_var.get()
-        
-        # Создание словаря подзадачи
-        if self.subtask is None:
-            # Создание новой подзадачи
-            new_subtask = {
-                'id': int(datetime.now().timestamp() * 1000),  # Уникальный ID
-                'title': title,
-                'comment': comment,
-                'completed': completed
-            }
-            self.result = new_subtask
-        else:
-            # Обновление существующей подзадачи
-            self.subtask['title'] = title
-            self.subtask['comment'] = comment
-            self.subtask['completed'] = completed
-            self.result = self.subtask
-        
-        # Помечаем как сохранённое и закрываем
-        self.saved = True
-        if self.on_save:
-            self.on_save(self.result)
-        self.dialog.destroy()
-    
-    def wait_for_result(self):
-        """
-        Ожидание закрытия диалога и возврат результата.
-        Блокирует выполнение до закрытия окна.
-        
-        Returns:
-            dict или None: Сохранённая подзадача или None если отменено
-        """
-        self.dialog.wait_window()
-        return self.result
-
-
-class PersonalOrganizerApp:
-    """
-    Главный класс приложения персонального органайзера.
-    Содержит всю логику интерфейса, управление данными и обработчики событий.
-    """
-    
-    def __init__(self, root):
-        """
-        Инициализация приложения: настройка стилей, создание интерфейса, загрузка данных.
-        
-        Args:
-            root: Главное окно Tkinter
-        """
-        self.root = root
-        self.root.title("Персональный органайзер")
-        self.root.geometry("1000x650")
-        self.root.minsize(800, 600)
-        
-        # Хранилище задач
-        self.tasks = {}
-        self.current_task_id = None
-        
-        # Настройка стиля приложения
-        self._setup_styles()
-        
-        # Создание основного интерфейса
-        self._create_ui()
-        
-        # Загрузка данных из файла
-        self._load_data()
-        
-        # Обновление дерева задач
-        self._refresh_task_tree()
-    
-    def _setup_styles(self):
-        """
-        Настройка ttk.Style: светлая тема, аккуратные отступы, шрифт Segoe UI 10pt.
-        Создает единый визуальный стиль для всех виджетов приложения.
-        """
-        style = ttk.Style()
-        
-        # Используем доступную тему как основу
-        available_themes = style.theme_names()
-        if 'vista' in available_themes:
-            style.theme_use('vista')
-        elif 'clam' in available_themes:
-            style.theme_use('clam')
-        
-        # Базовый шрифт для приложения
-        default_font = ('Segoe UI', 10)
-        
-        # Настройка базовых стилей
-        style.configure('.', font=default_font)
-        style.configure('TLabel', font=default_font, padding=2)
-        style.configure('TButton', font=default_font, padding=5)
-        style.configure('TEntry', font=default_font, padding=5)
-        style.configure('Treeview', font=default_font, rowheight=25)
-        style.configure('Treeview.Heading', font=('Segoe UI', 10, 'bold'))
-        
-        # Настройка цветов для светлой темы
-        style.configure('TFrame', background='#f0f0f0')
-        style.configure('TLabel', background='#f0f0f0')
-        
-        # Стили для панелей
-        style.configure('Toolbar.TFrame', background='#e0e0e0')
-        style.configure('LeftPanel.TFrame', background='#f5f5f5')
-        style.configure('RightPanel.TFrame', background='#ffffff')
-    
-    def _create_ui(self):
-        """
-        Создание основного интерфейса приложения.
-        Включает: верхнюю панель, левую панель с деревом задач, правую панель с деталями.
-        """
-        # Основной контейнер
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Создание верхней панели (toolbar)
-        self._create_toolbar()
-        
-        # Создание центральной области с двумя панелями
-        self._create_central_area()
-    
-    def _create_toolbar(self):
-        """
-        Создание верхней панели с полем поиска и кнопками-фильтрами.
-        Панель содержит элементы управления для фильтрации и поиска задач.
-        """
-        # Контейнер toolbar
-        self.toolbar_frame = ttk.Frame(self.main_frame, style='Toolbar.TFrame')
-        self.toolbar_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        # Левая часть toolbar - поиск
-        search_frame = ttk.Frame(self.toolbar_frame, style='Toolbar.TFrame')
-        search_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        # Метка и поле поиска
-        ttk.Label(search_frame, text="Поиск:", style='Toolbar.TFrame').pack(side=tk.LEFT, padx=(0, 5))
-        self.search_entry = EnhancedEntry(search_frame, width=40)
-        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        # Кнопка очистки поиска
-        self.clear_search_btn = ttk.Button(search_frame, text="✕", width=3, command=self._clear_search)
-        self.clear_search_btn.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # Правая часть toolbar - кнопки фильтров
-        filter_frame = ttk.Frame(self.toolbar_frame, style='Toolbar.TFrame')
-        filter_frame.pack(side=tk.RIGHT)
-        
-        # Кнопки фильтров по статусам
-        self.filter_all_btn = ttk.Button(filter_frame, text="Все", command=lambda: self._filter_tasks('all'))
-        self.filter_all_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.filter_today_btn = ttk.Button(filter_frame, text="Сегодня", command=lambda: self._filter_tasks('Сегодня'))
-        self.filter_today_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.filter_soon_btn = ttk.Button(filter_frame, text="Скоро", command=lambda: self._filter_tasks('Скоро'))
-        self.filter_soon_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.filter_later_btn = ttk.Button(filter_frame, text="Позже", command=lambda: self._filter_tasks('Позже'))
-        self.filter_later_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.filter_overdue_btn = ttk.Button(filter_frame, text="Просрочено", command=lambda: self._filter_tasks('Просрочено'))
-        self.filter_overdue_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.filter_completed_btn = ttk.Button(filter_frame, text="Выполнено", command=lambda: self._filter_tasks('Выполнено'))
-        self.filter_completed_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Текущий фильтр
-        self.current_filter = 'all'
-    
-    def _create_central_area(self):
-        """
-        Создание центральной области с левой и правой панелями.
-        Левая панель (250px) - Treeview со списком задач.
-        Правая панель - область деталей выбранной задачи.
-        """
-        # Контейнер для двух панелей
-        central_frame = ttk.Frame(self.main_frame)
-        central_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Левая панель со списком задач
-        self._create_left_panel(central_frame)
-        
-        # Разделитель между панелями
-        separator = ttk.Separator(central_frame, orient=tk.VERTICAL)
-        separator.pack(side=tk.LEFT, fill=tk.Y, padx=5)
-        
-        # Правая панель с деталями задачи
-        self._create_right_panel(central_frame)
-    
-    def _create_left_panel(self, parent):
-        """
-        Создание левой панели с Treeview для отображения списка задач.
-        Задачи группируются по статусам: Сегодня, Скоро, Позже, Просрочено, Выполнено.
-        
-        Args:
-            parent: Родительский контейнер
-        """
-        # Фрейм левой панели
-        left_frame = ttk.Frame(parent, width=250)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y)
-        left_frame.pack_propagate(False)  # Фиксируем ширину
-        
-        # Заголовок
-        ttk.Label(left_frame, text="Задачи", font=('Segoe UI', 12, 'bold')).pack(pady=5)
-        
-        # Контейнер для Treeview с прокруткой
-        tree_container = ttk.Frame(left_frame)
-        tree_container.pack(fill=tk.BOTH, expand=True)
-        
-        # Scrollbar для дерева
-        tree_scrollbar = ttk.Scrollbar(tree_container)
-        tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Treeview для отображения задач с группировкой
-        columns = ('title', 'type', 'due_date')
-        self.task_tree = ttk.Treeview(tree_container, columns=columns, show='tree headings', 
-                                       yscrollcommand=tree_scrollbar.set)
-        self.task_tree.pack(fill=tk.BOTH, expand=True)
-        
-        # Настройка scrollbar
-        tree_scrollbar.config(command=self.task_tree.yview)
-        
-        # Настройка колонок
-        self.task_tree.heading('#0', text='Название', anchor=tk.W)
-        self.task_tree.heading('title', text='Задача', anchor=tk.W)
-        self.task_tree.heading('type', text='Тип', anchor=tk.W)
-        self.task_tree.heading('due_date', text='Дата', anchor=tk.W)
-        
-        self.task_tree.column('#0', width=200, minwidth=150)
-        self.task_tree.column('title', width=1, minwidth=0)  # Скрытая колонка
-        self.task_tree.column('type', width=60, minwidth=50)
-        self.task_tree.column('due_date', width=70, minwidth=60)
-        
-        # Привязка события выбора задачи
-        self.task_tree.bind('<<TreeviewSelect>>', self._on_task_select)
-        self.task_tree.bind('<Double-1>', self._on_task_double_click)
-        
-        # Кнопки управления задачами
-        btn_frame = ttk.Frame(left_frame)
-        btn_frame.pack(fill=tk.X, pady=5)
-        
-        self.add_task_btn = ttk.Button(btn_frame, text="+ Добавить", command=self._add_task)
-        self.add_task_btn.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
-        
-        self.edit_task_btn = ttk.Button(btn_frame, text="✎ Изменить", command=self._edit_task)
-        self.edit_task_btn.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
-        
-        self.delete_task_btn = ttk.Button(btn_frame, text="🗑 Удалить", command=self._delete_task)
-        self.delete_task_btn.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
-    
-    def _create_right_panel(self, parent):
-        """
-        Создание правой панели для отображения и редактирования деталей задачи.
-        Содержит поля: заголовок, тип, дата, описание, подзадачи, напоминание.
-        
-        Args:
-            parent: Родительский контейнер
-        """
-        # Фрейм правой панели
-        right_frame = ttk.Frame(parent, style='RightPanel.TFrame')
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Заголовок панели
-        header_frame = ttk.Frame(right_frame)
-        header_frame.pack(fill=tk.X, pady=5)
-        
-        self.detail_title_label = ttk.Label(header_frame, text="Детали задачи", 
-                                            font=('Segoe UI', 14, 'bold'))
-        self.detail_title_label.pack(side=tk.LEFT)
-        
-        # Кнопка завершения задачи
-        self.complete_btn = ttk.Button(header_frame, text="✓ Выполнено", 
-                                       command=self._toggle_complete, state=tk.DISABLED)
-        self.complete_btn.pack(side=tk.RIGHT)
-        
-        # Контейнер для полей детали с прокруткой
-        details_container = ttk.Frame(right_frame)
-        details_container.pack(fill=tk.BOTH, expand=True)
-        
-        # Scrollbar для правой панели
-        details_scrollbar = ttk.Scrollbar(details_container)
-        details_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Canvas для прокручиваемой области
-        self.details_canvas = tk.Canvas(details_container, yscrollcommand=details_scrollbar.set,
-                                        highlightthickness=0)
-        self.details_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        details_scrollbar.config(command=self.details_canvas.yview)
-        
-        # Фрейм внутри canvas для размещения элементов
-        self.details_inner_frame = ttk.Frame(self.details_canvas)
-        self.details_canvas_window = self.details_canvas.create_window((0, 0), window=self.details_inner_frame, 
-                                                                        anchor=tk.NW)
-        
-        # Привязка изменения размера для обновления области прокрутки
-        self.details_inner_frame.bind('<Configure>', self._on_details_frame_configure)
-        self.details_canvas.bind('<Configure>', self._on_canvas_configure)
-        
-        # Поля деталей задачи
-        self._create_detail_fields()
-        
-        # Изначально скрываем детали (нет выбранной задачи)
-        self._hide_details()
-    
-    def _create_detail_fields(self):
-        """
-        Создание полей для отображения и редактирования деталей задачи.
-        Использует EnhancedEntry и EnhancedText для поддержки горячих клавиш.
-        """
-        # Поле заголовка
-        title_frame = ttk.Frame(self.details_inner_frame)
-        title_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(title_frame, text="Заголовок:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.title_entry = EnhancedEntry(title_frame, width=50)
-        self.title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.title_entry.bind('<KeyRelease>', self._on_field_change)
-        
-        # Поле типа задачи
-        type_frame = ttk.Frame(self.details_inner_frame)
-        type_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(type_frame, text="Тип:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.type_combo = ttk.Combobox(type_frame, values=["Обычная", "Встреча", "Звонок", 
-                                                            "Событие", "Дедлайн"], width=47)
-        self.type_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.type_combo.bind('<<ComboboxSelected>>', self._on_field_change)
-        
-        # Поле даты выполнения
-        date_frame = ttk.Frame(self.details_inner_frame)
-        date_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(date_frame, text="Дата выполнения:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.date_entry = EnhancedEntry(date_frame, width=20)
-        self.date_entry.pack(side=tk.LEFT, padx=5)
-        self.date_entry.bind('<KeyRelease>', self._on_field_change)
-        
-        # Кнопка выбора даты (если доступен tkcalendar)
-        if Calendar is not None:
-            self.calendar_btn = ttk.Button(date_frame, text="📅", command=self._show_calendar)
-            self.calendar_btn.pack(side=tk.LEFT, padx=2)
-        else:
-            ttk.Label(date_frame, text="(в формате ГГГГ-ММ-ДД)").pack(side=tk.LEFT, padx=5)
-        
-        # Поле времени напоминания
-        reminder_frame = ttk.Frame(self.details_inner_frame)
-        reminder_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(reminder_frame, text="Напоминание:", width=15, anchor=tk.E).pack(side=tk.LEFT)
-        self.reminder_spinbox = ttk.Spinbox(reminder_frame, from_=0, to=1440, width=10, 
-                                            increment=15, command=self._on_field_change)
-        self.reminder_spinbox.pack(side=tk.LEFT, padx=5)
-        ttk.Label(reminder_frame, text="минут до события").pack(side=tk.LEFT)
-        self.reminder_spinbox.bind('<KeyRelease>', self._on_field_change)
-        
-        # Поле описания
-        desc_label = ttk.Label(self.details_inner_frame, text="Описание:")
-        desc_label.pack(anchor=tk.W, pady=(10, 0))
-        self.description_text = EnhancedText(self.details_inner_frame, height=8, wrap=tk.WORD)
-        self.description_text.pack(fill=tk.X, pady=5)
-        self.description_text.bind('<KeyRelease>', self._on_field_change)
-        
-        # Подзадачи - секция с Treeview
-        subtasks_label = ttk.Label(self.details_inner_frame, text="Подзадачи:")
-        subtasks_label.pack(anchor=tk.W, pady=(10, 0))
-        
-        subtasks_container = ttk.Frame(self.details_inner_frame)
-        subtasks_container.pack(fill=tk.X, pady=5)
-        
-        # Контейнер для Treeview подзадач
-        subtasks_tree_frame = ttk.Frame(subtasks_container)
-        subtasks_tree_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Treeview для подзадач: колонки Название | Комментарий | ✓
-        subtask_columns = ('comment', 'completed')
-        self.subtasks_tree = ttk.Treeview(subtasks_tree_frame, columns=subtask_columns, 
-                                           show='headings', height=5)
-        self.subtasks_tree.heading('#0', text='Название', anchor=tk.W)
-        self.subtasks_tree.heading('comment', text='Комментарий', anchor=tk.W)
-        self.subtasks_tree.heading('completed', text='✓', anchor=tk.CENTER)
-        
-        self.subtasks_tree.column('#0', width=200, minwidth=150)
-        self.subtasks_tree.column('comment', width=200, minwidth=100)
-        self.subtasks_tree.column('completed', width=30, minwidth=30)
-        
-        # Скроллбар для дерева подзадач
-        subtasks_scrollbar = ttk.Scrollbar(subtasks_tree_frame, orient=tk.VERTICAL, 
-                                            command=self.subtasks_tree.yview)
-        self.subtasks_tree.configure(yscrollcommand=subtasks_scrollbar.set)
-        
-        self.subtasks_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        subtasks_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Привязка двойного клика для быстрого переключения выполнения
-        self.subtasks_tree.bind('<Double-1>', self._on_subtask_double_click)
-        
-        # Кнопки управления подзадачами
-        subtasks_btn_frame = ttk.Frame(subtasks_container)
-        subtasks_btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5)
-        
-        ttk.Button(subtasks_btn_frame, text="+", width=3, 
-                   command=self._add_subtask).pack(pady=1)
-        ttk.Button(subtasks_btn_frame, text="✎", width=3, 
-                   command=self._edit_subtask).pack(pady=1)
-        ttk.Button(subtasks_btn_frame, text="-", width=3, 
-                   command=self._remove_subtask).pack(pady=1)
-        ttk.Button(subtasks_btn_frame, text="✓", width=3, 
-                   command=self._toggle_subtask_complete).pack(pady=1)
-        
-        # Статус создания/изменения
-        self.status_label = ttk.Label(self.details_inner_frame, text="", foreground='gray')
-        self.status_label.pack(anchor=tk.W, pady=5)
-    
-    def _refresh_task_tree(self):
-        """
-        Обновление дерева задач на основе текущего фильтра.
-        Очищает дерево и заново заполняет его задачами из хранилища.
-        """
-        pass  # Заглушка для части 1
-    
-    def _filter_tasks(self, filter_type):
-        """
-        Фильтрация задач по типу и обновление дерева.
-        
-        Args:
-            filter_type: Тип фильтра ('all', 'Сегодня', 'Скоро', 'Позже', 'Просрочено', 'Выполнено')
-        """
-        pass  # Заглушка для части 1
-    
-    def _clear_search(self):
-        """Очистка поля поиска и сброс фильтрации."""
-        pass  # Заглушка для части 1
-    
-    def _on_task_select(self, event):
-        """
-        Обработчик выбора задачи в дереве.
-        Загружает детали выбранной задачи в правую панель.
-        
-        Args:
-            event: Событие выбора
-        """
-        pass  # Заглушка для части 1
-    
-    def _on_task_double_click(self, event):
-        """
-        Обработчик двойного клика по задаче.
-        Открывает диалог редактирования (будет реализовано в части 2).
-        
-        Args:
-            event: Событие клика
-        """
-        pass  # Заглушка для части 1
-    
-    def _add_task(self):
-        """
-        Создание новой задачи через диалог AddTaskDialog.
-        Открывает модальное окно для ввода данных задачи.
-        После сохранения добавляет задачу в хранилище и обновляет дерево.
-        """
-        def on_save(task):
-            """Callback после успешного сохранения задачи."""
-            if task:
-                self.tasks[task.id] = task
-                self._refresh_task_tree()
-                self._save_data()
-        
-        # Создаём и показываем диалог
-        dialog = AddTaskDialog(self.root, task=None, on_save=on_save)
-        dialog.wait_for_result()
-    
-    def _edit_task(self):
-        """
-        Редактирование выбранной задачи через диалог AddTaskDialog.
-        Открывает модальное окно с заполненными полями текущей задачи.
-        После сохранения обновляет данные и дерево задач.
-        """
-        # Проверяем, есть ли выбранная задача
-        if self.current_task_id is None or self.current_task_id not in self.tasks:
-            return
-        
-        task = self.tasks[self.current_task_id]
-        
-        def on_save(task):
-            """Callback после успешного сохранения задачи."""
-            if task:
-                self.tasks[task.id] = task
-                self._refresh_task_tree()
-                self._show_details()  # Обновить отображение деталей
-                self._save_data()
-        
-        # Создаём и показываем диалог с задачей для редактирования
-        dialog = AddTaskDialog(self.root, task=task, on_save=on_save)
-        dialog.wait_for_result()
-    
-    def _delete_task(self):
-        """Удаление выбранной задачи."""
-        pass  # Заглушка для части 1
-    
-    def _toggle_complete(self):
-        """Переключение статуса выполнения текущей задачи."""
-        pass  # Заглушка для части 1
-    
-    def _on_field_change(self, event=None):
-        """
-        Обработчик изменения любого поля детали задачи.
-        Отмечает задачу как несохранённую.
-        
-        Args:
-            event: Событие изменения
-        """
-        pass  # Заглушка для части 1
-    
-    def _show_calendar(self):
-        """Показать календарь для выбора даты (если tkcalendar доступен)."""
-        pass  # Заглушка для части 1
-    
-    def _hide_details(self):
-        """Скрытие панели деталей (когда задача не выбрана)."""
-        pass  # Заглушка для части 1
-    
-    def _show_details(self):
-        """Показ панели деталей с данными текущей задачи."""
-        pass  # Заглушка для части 1
-    
-    def _save_current_task(self):
-        """Сохранение изменений текущей задачи."""
-        pass  # Заглушка для части 1
-    
-    def _add_subtask(self):
-        """
-        Добавление подзадачи к текущей задаче.
-        Открывает диалог SubtaskEditDialog для создания новой подзадачи.
-        После сохранения добавляет подзадачу в список и обновляет отображение.
-        """
-        # Проверяем, есть ли выбранная задача
-        if self.current_task_id is None or self.current_task_id not in self.tasks:
-            return
-        
-        task = self.tasks[self.current_task_id]
-        
-        def on_save(subtask):
-            """Callback после успешного сохранения подзадачи."""
-            if subtask:
-                task.subtasks.append(subtask)
-                self._refresh_subtasks_list()
-                self._save_data()
-        
-        # Создаём и показываем диалог
-        dialog = SubtaskEditDialog(self.root, subtask=None, on_save=on_save)
-        dialog.wait_for_result()
-    
-    def _edit_subtask(self):
-        """
-        Редактирование выбранной подзадачи.
-        Открывает диалог SubtaskEditDialog с данными выбранной подзадачи.
-        После сохранения обновляет список подзадач.
-        """
-        # Проверяем, есть ли выбранная задача
-        if self.current_task_id is None or self.current_task_id not in self.tasks:
-            return
-        
-        task = self.tasks[self.current_task_id]
-        
-        # Получаем выбранную подзадачу из Treeview
-        selected = self.subtasks_tree.selection()
-        if not selected:
-            return
-        
-        # Получаем индекс выбранной подзадачи
-        item_index = self.subtasks_tree.index(selected[0])
-        if item_index < 0 or item_index >= len(task.subtasks):
-            return
-        
-        subtask = task.subtasks[item_index]
-        
-        def on_save(subtask):
-            """Callback после успешного сохранения подзадачи."""
-            if subtask:
-                task.subtasks[item_index] = subtask
-                self._refresh_subtasks_list()
-                self._save_data()
-        
-        # Создаём и показываем диалог с подзадачей для редактирования
-        dialog = SubtaskEditDialog(self.root, subtask=subtask, on_save=on_save)
-        dialog.wait_for_result()
-    
-    def _remove_subtask(self):
-        """
-        Удаление выбранной подзадачи из текущей задачи.
-        Удаляет подзадачу из списка и обновляет отображение.
-        """
-        # Проверяем, есть ли выбранная задача
-        if self.current_task_id is None or self.current_task_id not in self.tasks:
-            return
-        
-        task = self.tasks[self.current_task_id]
-        
-        # Получаем выбранные подзадачи из Treeview
-        selected = self.subtasks_tree.selection()
-        if not selected:
-            return
-        
-        # Получаем индексы выбранных подзадач (в обратном порядке для безопасного удаления)
-        indices = [self.subtasks_tree.index(item) for item in selected]
-        indices.sort(reverse=True)
-        
-        # Удаляем подзадачи по индексам
-        for index in indices:
-            if 0 <= index < len(task.subtasks):
-                del task.subtasks[index]
-        
-        self._refresh_subtasks_list()
-        self._save_data()
-    
-    def _toggle_subtask_complete(self):
-        """
-        Переключение статуса выполнения выбранной подзадачи.
-        Меняет флаг completed на противоположный и обновляет отображение.
-        """
-        # Проверяем, есть ли выбранная задача
-        if self.current_task_id is None or self.current_task_id not in self.tasks:
-            return
-        
-        task = self.tasks[self.current_task_id]
-        
-        # Получаем выбранную подзадачу из Treeview
-        selected = self.subtasks_tree.selection()
-        if not selected:
-            return
-        
-        # Получаем индекс выбранной подзадачи
-        item_index = self.subtasks_tree.index(selected[0])
-        if item_index < 0 or item_index >= len(task.subtasks):
-            return
-        
-        # Переключаем статус выполнения
-        task.subtasks[item_index]['completed'] = not task.subtasks[item_index].get('completed', False)
-        
-        self._refresh_subtasks_list()
-        self._save_data()
-    
-    def _on_subtask_double_click(self, event):
-        """
-        Обработчик двойного клика по подзадаче.
-        Быстро переключает статус выполнения подзадачи.
-        
-        Args:
-            event: Событие клика мыши
-        """
-        self._toggle_subtask_complete()
-    
-    def _refresh_subtasks_list(self):
-        """
-        Обновление списка подзадач в Treeview.
-        Очищает дерево и заново заполняет его подзадачами из текущей задачи.
-        """
-        # Проверяем, есть ли выбранная задача
-        if self.current_task_id is None or self.current_task_id not in self.tasks:
-            return
-        
-        task = self.tasks[self.current_task_id]
-        
-        # Очищаем дерево
-        for item in self.subtasks_tree.get_children():
-            self.subtasks_tree.delete(item)
-        
-        # Заполняем дерево подзадачами
-        for subtask in task.subtasks:
-            title = subtask.get('title', '')
-            comment = subtask.get('comment', '')
-            completed = subtask.get('completed', False)
-            completed_mark = '✓' if completed else ''
+        ttk.Label(dialog, text="Название задачи:").pack(anchor=tk.W, padx=20, pady=(20,5))
+        name_entry = ttk.Entry(dialog, width=50)
+        name_entry.pack(padx=20, fill=tk.X)
+        name_entry.insert(0, task.get('title', ''))
+        name_entry.focus()
+        
+        # Статус
+        ttk.Label(dialog, text="Статус:").pack(anchor=tk.W, padx=20, pady=(15,5))
+        status_var = tk.StringVar(value=task.get('status', 'Не начата'))
+        status_frame = ttk.Frame(dialog)
+        status_frame.pack(padx=20, fill=tk.X)
+        for status in ["Не начата", "В процессе", "Завершена", "Отложена"]:
+            ttk.Radiobutton(status_frame, text=status, variable=status_var, value=status).pack(side=tk.LEFT, padx=10)
+        
+        # Приоритет
+        prio_frame = ttk.LabelFrame(dialog, text="Приоритет")
+        prio_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        ttk.Label(prio_frame, text="Важность:").pack(anchor=tk.W, padx=5, pady=5)
+        importance_scale = ttk.Scale(prio_frame, from_=1, to=5, orient=tk.HORIZONTAL, length=300)
+        importance_scale.set(task.get('importance', 3))
+        importance_scale.pack(padx=5)
+        imp_label = ttk.Label(prio_frame, text=str(task.get('importance', 3)))
+        imp_label.pack()
+        importance_scale.bind('<Motion>', lambda e: imp_label.config(text=str(int(importance_scale.get()))))
+        
+        ttk.Label(prio_frame, text="Срочность:").pack(anchor=tk.W, padx=5, pady=5)
+        urgency_scale = ttk.Scale(prio_frame, from_=1, to=5, orient=tk.HORIZONTAL, length=300)
+        urgency_scale.set(task.get('urgency', 3))
+        urgency_scale.pack(padx=5)
+        urg_label = ttk.Label(prio_frame, text=str(task.get('urgency', 3)))
+        urg_label.pack()
+        urgency_scale.bind('<Motion>', lambda e: urg_label.config(text=str(int(urgency_scale.get()))))
+        
+        # Сроки
+        date_frame = ttk.LabelFrame(dialog, text="Сроки")
+        date_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        ttk.Label(date_frame, text="Дедлайн:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        deadline_entry = ttk.Entry(date_frame, width=30)
+        deadline_entry.grid(row=0, column=1, padx=5, pady=5)
+        deadline_entry.insert(0, task.get('deadline', ''))
+        
+        ttk.Label(date_frame, text="Периодичность:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        recurrence_var = tk.StringVar(value=task.get('recurrence', 'Нет'))
+        recurrence_combo = ttk.Combobox(date_frame, textvariable=recurrence_var, 
+                                        values=["Нет", "Ежедневно", "Еженедельно", "Ежемесячно", "Ежегодно"])
+        recurrence_combo.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        # Описание
+        ttk.Label(dialog, text="Описание:").pack(anchor=tk.W, padx=20, pady=(15,5))
+        desc_text = tk.Text(dialog, height=8, width=60)
+        desc_text.pack(padx=20, fill=tk.X)
+        desc_text.insert('1.0', task.get('description', ''))
+        
+        # Вложения
+        files_frame = ttk.LabelFrame(dialog, text="Вложения")
+        files_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        files_list = list(task.get('files', []))
+        
+        def add_file():
+            filename = filedialog.askopenfilename()
+            if filename:
+                files_list.append(filename)
+                update_files_list()
+        
+        def remove_file():
+            sel = files_listbox.curselection()
+            if sel:
+                del files_list[sel[0]]
+                update_files_list()
+        
+        def update_files_list():
+            files_listbox.delete(0, tk.END)
+            for f in files_list:
+                files_listbox.insert(tk.END, os.path.basename(f))
+        
+        ttk.Button(files_frame, text="📎 Добавить файл", command=add_file).pack(pady=5)
+        files_listbox = tk.Listbox(files_frame, height=4, width=50)
+        files_listbox.pack(pady=5)
+        ttk.Button(files_frame, text="Удалить файл", command=remove_file).pack(pady=5)
+        update_files_list()
+        
+        # Подзадачи
+        sub_frame = ttk.LabelFrame(dialog, text="Подзадачи")
+        sub_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        def add_subtask():
+            sub_dialog = tk.Toplevel(dialog)
+            sub_dialog.title("Добавить подзадачу")
+            sub_dialog.geometry("400x300")
+            sub_dialog.transient(dialog)
             
-            # Вставляем подзадачу в дерево
-            item_id = self.subtasks_tree.insert('', tk.END, text=title, 
-                                                 values=(comment, completed_mark))
-            # Помечаем выполненную подзадачу цветом (серым)
-            if completed:
-                self.subtasks_tree.item(item_id, tags=('completed',))
+            ttk.Label(sub_dialog, text="Название подзадачи:").pack(padx=20, pady=10)
+            sub_name = ttk.Entry(sub_dialog, width=40)
+            sub_name.pack(padx=20)
+            
+            ttk.Label(sub_dialog, text="Важность (1-5):").pack(padx=20, pady=5)
+            sub_imp = ttk.Spinbox(sub_dialog, from_=1, to=5, width=10)
+            sub_imp.set(3)
+            sub_imp.pack(padx=20)
+            
+            ttk.Label(sub_dialog, text="Срочность (1-5):").pack(padx=20, pady=5)
+            sub_urg = ttk.Spinbox(sub_dialog, from_=1, to=5, width=10)
+            sub_urg.set(3)
+            sub_urg.pack(padx=20)
+            
+            def save_sub():
+                name = sub_name.get().strip()
+                if name:
+                    if 'subtasks' not in task:
+                        task['subtasks'] = []
+                    task['subtasks'].append({
+                        'id': self.get_next_id(),
+                        'title': name,
+                        'importance': int(sub_imp.get()),
+                        'urgency': int(sub_urg.get()),
+                        'status': 'Не начата'
+                    })
+                    self.save_data()
+                    self.refresh_task_tree()
+                    sub_dialog.destroy()
+                    update_subtasks_list()
+            
+            ttk.Button(sub_dialog, text="Добавить", command=save_sub).pack(pady=20)
+            ttk.Button(sub_dialog, text="Отмена", command=sub_dialog.destroy).pack()
         
-        # Настраиваем теги для стилизации выполненных подзадач
-        self.subtasks_tree.tag_configure('completed', foreground='gray')
+        def update_subtasks_list():
+            for w in sub_frame.winfo_children()[1:]:
+                w.destroy()
+            
+            subtasks = task.get('subtasks', [])
+            for i, sub in enumerate(subtasks):
+                frame = ttk.Frame(sub_frame)
+                frame.pack(fill=tk.X, padx=5, pady=2)
+                ttk.Label(frame, text=f"{i+1}. {sub.get('title', 'Подзадача')}").pack(side=tk.LEFT)
+                
+                def make_delete(idx):
+                    def delete_sub():
+                        if 'subtasks' in task and idx < len(task['subtasks']):
+                            del task['subtasks'][idx]
+                            self.save_data()
+                            self.refresh_task_tree()
+                            update_subtasks_list()
+                    return delete_sub
+                
+                ttk.Button(frame, text="🗑", command=make_delete(i)).pack(side=tk.RIGHT)
+        
+        update_subtasks_list()
+        
+        ttk.Button(sub_frame, text="+ Добавить подзадачу", command=add_subtask).pack(pady=5)
+        
+        # Кнопки
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=20)
+        
+        def save_changes():
+            title = name_entry.get().strip()
+            if not title:
+                messagebox.showwarning("Предупреждение", "Введите название задачи!")
+                return
+            
+            task['title'] = title
+            task['status'] = status_var.get()
+            task['importance'] = int(importance_scale.get())
+            task['urgency'] = int(urgency_scale.get())
+            task['deadline'] = deadline_entry.get().strip()
+            task['recurrence'] = recurrence_var.get()
+            task['description'] = desc_text.get('1.0', tk.END).strip()
+            task['files'] = files_list
+            
+            self.save_data()
+            self.refresh_task_tree()
+            self.on_task_select()
+            self.update_status_bar()
+            dialog.destroy()
+        
+        ttk.Button(btn_frame, text="Сохранить", command=save_changes).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Отмена", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
     
-    def _on_details_frame_configure(self, event):
-        """Обновление области прокрутки при изменении размера фрейма деталей."""
-        self.details_canvas.configure(scrollregion=self.details_canvas.bbox('all'))
+    def delete_selected_task(self):
+        """Удаление выбранной задачи"""
+        selection = self.task_tree.selection()
+        if not selection:
+            messagebox.showinfo("Информация", "Выберите задачу для удаления")
+            return
+        
+        if not messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить эту задачу?"):
+            return
+        
+        item_id = selection[0]
+        task = self.find_task_by_tree_id(item_id)
+        
+        if task:
+            task_id = task['id']
+            found_task, parent_list = self.find_task_by_id(task_id)
+            if found_task and parent_list:
+                parent_list.remove(found_task)
+                self.save_data()
+                self.refresh_task_tree()
+                self.clear_details()
+                self.update_status_bar()
     
-    def _on_canvas_configure(self, event):
-        """Подстройка ширины внутреннего фрейма под canvas."""
-        self.details_canvas.itemconfig(self.details_canvas_window, width=event.width)
+    def open_selected_file(self):
+        """Открытие выбранного файла"""
+        selection = self.detail_files.selection()
+        if not selection:
+            return
+        
+        item = self.detail_files.item(selection[0])
+        filepath = item['values'][0] if item['values'] else None
+        
+        if filepath and os.path.exists(filepath):
+            if os.name == 'nt':
+                os.startfile(filepath)
+            else:
+                subprocess.call(['xdg-open', filepath])
+        else:
+            messagebox.showwarning("Предупреждение", "Файл не найден")
     
-    def _load_data(self):
-        """
-        Загрузка данных задач из JSON-файла organizer_data.json.
-        Если файл не существует, создаётся пустое хранилище.
-        """
-        pass  # Заглушка для части 1
+    def open_templates_window(self):
+        """Открытие окна шаблонов"""
+        window = tk.Toplevel(self.root)
+        window.title("ШАБЛОНЫ ЗАДАЧ")
+        window.geometry("800x600")
+        window.transient(self.root)
+        
+        # Список шаблонов
+        list_frame = ttk.LabelFrame(window, text="СПИСОК ШАБЛОНОВ")
+        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        templates_listbox = tk.Listbox(list_frame, width=40, height=20)
+        templates_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        for t in self.templates:
+            templates_listbox.insert(tk.END, f"📋 {t['name']} ({t.get('category', '')})")
+        
+        def select_template(event):
+            sel = templates_listbox.curselection()
+            if sel:
+                idx = sel[0]
+                template = self.templates[idx]
+                
+                for w in details_frame.winfo_children():
+                    w.destroy()
+                
+                ttk.Label(details_frame, text=f"Название: {template['name']}").pack(anchor=tk.W, padx=5)
+                ttk.Label(details_frame, text=f"Категория: {template.get('category', '')}").pack(anchor=tk.W, padx=5)
+                ttk.Label(details_frame, text=f"Описание: {template.get('description', '')}").pack(anchor=tk.W, padx=5)
+                
+                ttk.Label(details_frame, text="Структура подзадач:").pack(anchor=tk.W, padx=5, pady=(10,0))
+                for i, sub in enumerate(template.get('subtasks', [])):
+                    ttk.Label(details_frame, text=f"  {i+1}. {sub.get('title', '')} (В: {sub.get('importance', 3)}, С: {sub.get('urgency', 3)})").pack(anchor=tk.W, padx=15)
+        
+        templates_listbox.bind('<<ListboxSelect>>', select_template)
+        
+        # Детали
+        details_frame = ttk.LabelFrame(window, text="ДЕТАЛИ ШАБЛОНА")
+        details_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Кнопки управления
+        btn_frame = ttk.Frame(window)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+        
+        def apply_template():
+            sel = templates_listbox.curselection()
+            if not sel:
+                messagebox.showinfo("Информация", "Выберите шаблон")
+                return
+            
+            template = self.templates[sel[0]]
+            self.open_add_task_dialog(template=template)
+        
+        def new_template():
+            t_dialog = tk.Toplevel(window)
+            t_dialog.title("Новый шаблон")
+            t_dialog.geometry("500x500")
+            t_dialog.transient(window)
+            
+            ttk.Label(t_dialog, text="Название:").pack(padx=20, pady=5)
+            name_entry = ttk.Entry(t_dialog, width=40)
+            name_entry.pack(padx=20)
+            
+            ttk.Label(t_dialog, text="Категория:").pack(padx=20, pady=5)
+            cat_entry = ttk.Entry(t_dialog, width=40)
+            cat_entry.pack(padx=20)
+            
+            ttk.Label(t_dialog, text="Описание:").pack(padx=20, pady=5)
+            desc_text = tk.Text(t_dialog, height=5, width=40)
+            desc_text.pack(padx=20)
+            
+            subtasks = []
+            
+            def add_subtask():
+                s_dialog = tk.Toplevel(t_dialog)
+                s_dialog.title("Подзадача шаблона")
+                s_dialog.geometry("300x200")
+                
+                ttk.Label(s_dialog, text="Название:").pack(padx=10, pady=5)
+                s_name = ttk.Entry(s_dialog, width=30)
+                s_name.pack(padx=10)
+                
+                ttk.Label(s_dialog, text="Важность:").pack(padx=10, pady=5)
+                s_imp = ttk.Spinbox(s_dialog, from_=1, to=5, width=10)
+                s_imp.set(3)
+                s_imp.pack(padx=10)
+                
+                ttk.Label(s_dialog, text="Срочность:").pack(padx=10, pady=5)
+                s_urg = ttk.Spinbox(s_dialog, from_=1, to=5, width=10)
+                s_urg.set(3)
+                s_urg.pack(padx=10)
+                
+                def save():
+                    name = s_name.get().strip()
+                    if name:
+                        subtasks.append({
+                            'title': name,
+                            'importance': int(s_imp.get()),
+                            'urgency': int(s_urg.get())
+                        })
+                        s_dialog.destroy()
+                
+                ttk.Button(s_dialog, text="Добавить", command=save).pack(pady=10)
+                ttk.Button(s_dialog, text="Отмена", command=s_dialog.destroy).pack()
+            
+            ttk.Button(t_dialog, text="+ Добавить подзадачу", command=add_subtask).pack(pady=5)
+            
+            def save_template():
+                name = name_entry.get().strip()
+                if not name:
+                    messagebox.showwarning("Предупреждение", "Введите название шаблона")
+                    return
+                
+                new_t = {
+                    'id': len(self.templates) + 1,
+                    'name': name,
+                    'category': cat_entry.get().strip(),
+                    'description': desc_text.get('1.0', tk.END).strip(),
+                    'subtasks': subtasks
+                }
+                self.templates.append(new_t)
+                self.save_data()
+                templates_listbox.insert(tk.END, f"📋 {name}")
+                t_dialog.destroy()
+            
+            ttk.Button(t_dialog, text="Сохранить", command=save_template).pack(pady=10)
+            ttk.Button(t_dialog, text="Отмена", command=t_dialog.destroy).pack()
+        
+        def delete_template():
+            sel = templates_listbox.curselection()
+            if not sel:
+                messagebox.showinfo("Информация", "Выберите шаблон")
+                return
+            
+            if messagebox.askyesno("Подтверждение", "Удалить шаблон?"):
+                del self.templates[sel[0]]
+                self.save_data()
+                templates_listbox.delete(sel[0])
+                for w in details_frame.winfo_children():
+                    w.destroy()
+        
+        ttk.Button(btn_frame, text="Применить", command=apply_template).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="+ Новый шаблон", command=new_template).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="🗑 Удалить", command=delete_template).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Закрыть", command=window.destroy).pack(side=tk.RIGHT, padx=5)
     
-    def _save_data(self):
-        """
-        Сохранение всех задач в JSON-файл organizer_data.json.
-        Вызывается при закрытии приложения и после значимых изменений.
-        """
-        pass  # Заглушка для части 1
+    def open_today_view(self):
+        """Открытие представления 'Сегодня'"""
+        window = tk.Toplevel(self.root)
+        window.title("ЗАДАЧИ НА СЕГОДНЯ")
+        window.geometry("900x600")
+        
+        today = datetime.now().strftime("%d.%m.%Y")
+        weekday = datetime.now().strftime("%A")
+        weekdays_ru = {"Monday": "Понедельник", "Tuesday": "Вторник", "Wednesday": "Среда", 
+                       "Thursday": "Четверг", "Friday": "Пятница", "Saturday": "Суббота", "Sunday": "Воскресенье"}
+        weekday_ru = weekdays_ru.get(weekday, weekday)
+        
+        ttk.Label(window, text=f"{weekday_ru}, {today}", font=('Arial', 14, 'bold')).pack(pady=10)
+        
+        # Фильтрация задач
+        urgent_tasks = []
+        important_tasks = []
+        planned_tasks = []
+        
+        def collect_tasks(tasks):
+            for task in tasks:
+                deadline = task.get('deadline', '')
+                importance = task.get('importance', 0)
+                urgency = task.get('urgency', 0)
+                
+                is_today = today in deadline if deadline else False
+                
+                if is_today or urgency >= 4:
+                    urgent_tasks.append(f"□ {task['title']} (Срочность: {'●'*urgency}{'○'*(5-urgency)})")
+                elif importance >= 4:
+                    important_tasks.append(f"□ {task['title']} (Важность: {'●'*importance}{'○'*(5-importance)})")
+                else:
+                    planned_tasks.append(f"□ {task['title']} (Важность: {'●'*importance}{'○'*(5-importance)})")
+                
+                if 'subtasks' in task:
+                    collect_tasks(task['subtasks'])
+        
+        collect_tasks(self.tasks)
+        
+        # Срочные
+        urgent_frame = ttk.LabelFrame(window, text="🔴 СРОЧНЫЕ ЗАДАЧИ")
+        urgent_frame.pack(fill=tk.X, padx=10, pady=5)
+        for t in urgent_tasks[:10]:
+            ttk.Label(urgent_frame, text=t).pack(anchor=tk.W, padx=5)
+        
+        # Важные
+        imp_frame = ttk.LabelFrame(window, text="🟡 ВАЖНЫЕ ЗАДАЧИ")
+        imp_frame.pack(fill=tk.X, padx=10, pady=5)
+        for t in important_tasks[:10]:
+            ttk.Label(imp_frame, text=t).pack(anchor=tk.W, padx=5)
+        
+        # Плановые
+        plan_frame = ttk.LabelFrame(window, text="🟢 ПЛАНОВЫЕ ЗАДАЧИ")
+        plan_frame.pack(fill=tk.X, padx=10, pady=5)
+        for t in planned_tasks[:10]:
+            ttk.Label(plan_frame, text=t).pack(anchor=tk.W, padx=5)
+        
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=10)
     
-    def _on_close(self):
-        """
-        Обработчик закрытия окна приложения.
-        Сохраняет данные перед выходом.
-        """
-        self._save_data()
-        self.root.destroy()
-
-
-def main():
-    """
-    Точка входа в приложение.
-    Создаёт главное окно, инициализирует приложение и запускает mainloop.
-    """
-    # Создание главного окна
-    root = tk.Tk()
+    def open_soon_view(self):
+        """Открытие представления 'В ближайшее время'"""
+        window = tk.Toplevel(self.root)
+        window.title("В БЛИЖАЙШЕЕ ВРЕМЯ")
+        window.geometry("700x500")
+        
+        ttk.Label(window, text="Задачи на ближайшие 7 дней", font=('Arial', 14, 'bold')).pack(pady=10)
+        
+        soon_frame = ttk.Frame(window)
+        soon_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        tree = ttk.Treeview(soon_frame, columns=('deadline', 'priority'), show='headings')
+        tree.heading('#0', text='Задача')
+        tree.heading('deadline', text='Дедлайн')
+        tree.heading('priority', text='Приоритет')
+        tree.column('#0', width=300)
+        tree.column('deadline', width=150)
+        tree.column('priority', width=100)
+        tree.pack(fill=tk.BOTH, expand=True)
+        
+        today = datetime.now()
+        week_later = today + timedelta(days=7)
+        
+        def add_tasks(tasks):
+            for task in tasks:
+                deadline = task.get('deadline', '')
+                if deadline:
+                    try:
+                        dl_date = datetime.strptime(deadline.split()[0], "%d.%m.%Y")
+                        if today <= dl_date <= week_later:
+                            tree.insert('', 'end', text=task['title'], 
+                                       values=(deadline, f"{task.get('importance', 0)}/{task.get('urgency', 0)}"))
+                    except:
+                        pass
+                if 'subtasks' in task:
+                    add_tasks(task['subtasks'])
+        
+        add_tasks(self.tasks)
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=10)
     
-    # Создание экземпляра приложения
-    app = PersonalOrganizerApp(root)
+    def open_urgent_view(self):
+        """Открытие представления 'Срочные'"""
+        window = tk.Toplevel(self.root)
+        window.title("СРОЧНЫЕ ЗАДАЧИ")
+        window.geometry("700x500")
+        
+        ttk.Label(window, text="Задачи с высокой срочностью (4-5)", font=('Arial', 14, 'bold')).pack(pady=10)
+        
+        tree = ttk.Treeview(window, columns=('urgency', 'status'), show='headings')
+        tree.heading('#0', text='Задача')
+        tree.heading('urgency', text='Срочность')
+        tree.heading('status', text='Статус')
+        tree.column('#0', width=350)
+        tree.column('urgency', width=100)
+        tree.column('status', width=100)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        def add_urgent(tasks):
+            for task in tasks:
+                if task.get('urgency', 0) >= 4:
+                    tree.insert('', 'end', text=task['title'],
+                               values=(task.get('urgency', 0), task.get('status', '')))
+                if 'subtasks' in task:
+                    add_urgent(task['subtasks'])
+        
+        add_urgent(self.tasks)
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=10)
     
-    # Привязка обработчика закрытия окна
-    root.protocol("WM_DELETE_WINDOW", app._on_close)
+    def open_non_urgent_view(self):
+        """Открытие представления 'Несрочные'"""
+        window = tk.Toplevel(self.root)
+        window.title("НЕСРОЧНЫЕ ЗАДАЧИ")
+        window.geometry("700x500")
+        
+        ttk.Label(window, text="Задачи с низкой срочностью (1-2)", font=('Arial', 14, 'bold')).pack(pady=10)
+        
+        tree = ttk.Treeview(window, columns=('urgency', 'importance'), show='headings')
+        tree.heading('#0', text='Задача')
+        tree.heading('urgency', text='Срочность')
+        tree.heading('importance', text='Важность')
+        tree.column('#0', width=350)
+        tree.column('urgency', width=100)
+        tree.column('importance', width=100)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        def add_non_urgent(tasks):
+            for task in tasks:
+                if task.get('urgency', 0) <= 2:
+                    tree.insert('', 'end', text=task['title'],
+                               values=(task.get('urgency', 0), task.get('importance', 0)))
+                if 'subtasks' in task:
+                    add_non_urgent(task['subtasks'])
+        
+        add_non_urgent(self.tasks)
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=10)
     
-    # Запуск главного цикла обработки событий
-    root.mainloop()
+    def open_priority_view(self):
+        """Открытие представления 'По приоритету'"""
+        window = tk.Toplevel(self.root)
+        window.title("ЗАДАЧИ ПО ПРИОРИТЕТУ")
+        window.geometry("700x500")
+        
+        ttk.Label(window, text="Сортировка по приоритету (Важность × Срочность)", font=('Arial', 14, 'bold')).pack(pady=10)
+        
+        tree = ttk.Treeview(window, columns=('priority', 'status'), show='headings')
+        tree.heading('#0', text='Задача')
+        tree.heading('priority', text='Приоритет')
+        tree.heading('status', text='Статус')
+        tree.column('#0', width=300)
+        tree.column('priority', width=100)
+        tree.column('status', width=100)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        all_tasks = []
+        def collect(tasks):
+            for task in tasks:
+                priority = task.get('importance', 0) * task.get('urgency', 0)
+                all_tasks.append((task, priority))
+                if 'subtasks' in task:
+                    collect(task['subtasks'])
+        
+        collect(self.tasks)
+        all_tasks.sort(key=lambda x: x[1], reverse=True)
+        
+        for task, priority in all_tasks:
+            tree.insert('', 'end', text=task['title'],
+                       values=(priority, task.get('status', '')))
+        
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=10)
+    
+    def open_eisenhower_matrix(self):
+        """Открытие матрицы Эйзенхауэра"""
+        window = tk.Toplevel(self.root)
+        window.title("МАТРИЦА ПРИОРИТЕТОВ (ЭЙЗЕНХАУЭРА)")
+        window.geometry("1000x700")
+        
+        main_frame = ttk.Frame(window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        quadrants = {
+            "urgent_important": {"title": "🔴 СРОЧНЫЕ И ВАЖНЫЕ\nСделать немедленно", "tasks": [], "color": "#ffcccc"},
+            "not_urgent_important": {"title": "🟢 НЕСРОЧНЫЕ, НО ВАЖНЫЕ\nЗапланировать", "tasks": [], "color": "#ccffcc"},
+            "urgent_not_important": {"title": "🟡 СРОЧНЫЕ, НО НЕ ВАЖНЫЕ\nДелегировать", "tasks": [], "color": "#ffffcc"},
+            "not_urgent_not_important": {"title": "⚪ НЕСРОЧНЫЕ И НЕ ВАЖНЫЕ\nУстранить", "tasks": [], "color": "#f0f0f0"}
+        }
+        
+        def classify_tasks(tasks):
+            for task in tasks:
+                imp = task.get('importance', 0)
+                urg = task.get('urgency', 0)
+                
+                if urg >= 4 and imp >= 4:
+                    quadrants["urgent_important"]["tasks"].append(task['title'])
+                elif urg <= 3 and imp >= 4:
+                    quadrants["not_urgent_important"]["tasks"].append(task['title'])
+                elif urg >= 4 and imp <= 3:
+                    quadrants["urgent_not_important"]["tasks"].append(task['title'])
+                else:
+                    quadrants["not_urgent_not_important"]["tasks"].append(task['title'])
+                
+                if 'subtasks' in task:
+                    classify_tasks(task['subtasks'])
+        
+        classify_tasks(self.tasks)
+        
+        for i, (key, data) in enumerate(quadrants.items()):
+            row = i // 2
+            col = i % 2
+            
+            frame = tk.Frame(main_frame, bg=data["color"], relief=tk.RAISED, borderwidth=2)
+            frame.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
+            main_frame.grid_rowconfigure(row, weight=1)
+            main_frame.grid_columnconfigure(col, weight=1)
+            
+            ttk.Label(frame, text=data["title"], font=('Arial', 12, 'bold'), background=data["color"]).pack(pady=5)
+            
+            listbox = tk.Listbox(frame, height=8, bg=data["color"], relief=tk.FLAT)
+            listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            
+            for task in data["tasks"][:15]:
+                listbox.insert(tk.END, f"• {task}")
+        
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=10)
+    
+    def open_settings_window(self):
+        """Открытие окна настроек"""
+        window = tk.Toplevel(self.root)
+        window.title("НАСТРОЙКИ")
+        window.geometry("600x500")
+        window.transient(self.root)
+        
+        notebook = ttk.Notebook(window)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Общие настройки
+        general_frame = ttk.Frame(notebook)
+        notebook.add(general_frame, text="Общие")
+        
+        ttk.Label(general_frame, text="Язык интерфейса:").grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+        lang_var = tk.StringVar(value=self.settings.get('language', 'Russian'))
+        lang_combo = ttk.Combobox(general_frame, textvariable=lang_var, values=["Russian", "English", "Belarusian"])
+        lang_combo.grid(row=0, column=1, padx=10, pady=10)
+        
+        ttk.Label(general_frame, text="Тема оформления:").grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
+        theme_var = tk.StringVar(value=self.settings.get('theme', 'Light'))
+        theme_combo = ttk.Combobox(general_frame, textvariable=theme_var, values=["Light", "Dark"])
+        theme_combo.grid(row=1, column=1, padx=10, pady=10)
+        
+        ttk.Label(general_frame, text="Начало рабочей недели:").grid(row=2, column=0, padx=10, pady=10, sticky=tk.W)
+        week_var = tk.StringVar(value=self.settings.get('week_start', 'Monday'))
+        week_combo = ttk.Combobox(general_frame, textvariable=week_var, values=["Monday", "Sunday"])
+        week_combo.grid(row=2, column=1, padx=10, pady=10)
+        
+        ttk.Label(general_frame, text="Формат даты:").grid(row=3, column=0, padx=10, pady=10, sticky=tk.W)
+        date_var = tk.StringVar(value=self.settings.get('date_format', '%d.%m.%Y'))
+        date_combo = ttk.Combobox(general_frame, textvariable=date_var, values=["%d.%m.%Y", "%m/%d/%Y", "%Y-%m-%d"])
+        date_combo.grid(row=3, column=1, padx=10, pady=10)
+        
+        ttk.Label(general_frame, text="Формат времени:").grid(row=4, column=0, padx=10, pady=10, sticky=tk.W)
+        time_var = tk.StringVar(value=self.settings.get('time_format', '24h'))
+        time_combo = ttk.Combobox(general_frame, textvariable=time_var, values=["24h", "12h"])
+        time_combo.grid(row=4, column=1, padx=10, pady=10)
+        
+        # Уведомления
+        notify_frame = ttk.Frame(notebook)
+        notebook.add(notify_frame, text="Уведомления")
+        
+        notify_enabled = tk.BooleanVar(value=self.settings.get('notifications_enabled', True))
+        ttk.Checkbutton(notify_frame, text="Включить уведомления", variable=notify_enabled).grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+        
+        ttk.Label(notify_frame, text="Напоминания о дедлайнах за:").grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
+        reminder_var = tk.StringVar(value=str(self.settings.get('reminder_before', 30)))
+        reminder_combo = ttk.Combobox(notify_frame, textvariable=reminder_var, values=["15 минут", "30 минут", "1 час", "2 часа"])
+        reminder_combo.grid(row=1, column=1, padx=10, pady=10)
+        
+        sound_enabled = tk.BooleanVar(value=self.settings.get('sound_notifications', True))
+        ttk.Checkbutton(notify_frame, text="Звуковые уведомления", variable=sound_enabled).grid(row=2, column=0, padx=10, pady=10, sticky=tk.W)
+        
+        popup_enabled = tk.BooleanVar(value=self.settings.get('popup_notifications', True))
+        ttk.Checkbutton(notify_frame, text="Всплывающие уведомления", variable=popup_enabled).grid(row=3, column=0, padx=10, pady=10, sticky=tk.W)
+        
+        # Тайм-менеджмент
+        tm_frame = ttk.Frame(notebook)
+        notebook.add(tm_frame, text="Тайм-менеджмент")
+        
+        eisenhower_enabled = tk.BooleanVar(value=self.settings.get('eisenhower_matrix', True))
+        ttk.Checkbutton(tm_frame, text="Использовать матрицу Эйзенхауэра", variable=eisenhower_enabled).grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+        
+        pomodoro_enabled = tk.BooleanVar(value=self.settings.get('pomodoro_enabled', False))
+        ttk.Checkbutton(tm_frame, text="Включить метод Pomodoro", variable=pomodoro_enabled).grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
+        
+        ttk.Label(tm_frame, text="Длительность фокуса (минут):").grid(row=2, column=0, padx=10, pady=10, sticky=tk.W)
+        focus_var = tk.StringVar(value=str(self.settings.get('pomodoro_focus', 25)))
+        focus_spin = ttk.Spinbox(tm_frame, textvariable=focus_var, from_=15, to=60, width=10)
+        focus_spin.grid(row=2, column=1, padx=10, pady=10)
+        
+        ttk.Label(tm_frame, text="Перерыв (минут):").grid(row=3, column=0, padx=10, pady=10, sticky=tk.W)
+        break_var = tk.StringVar(value=str(self.settings.get('pomodoro_break', 5)))
+        break_spin = ttk.Spinbox(tm_frame, textvariable=break_var, from_=3, to=30, width=10)
+        break_spin.grid(row=3, column=1, padx=10, pady=10)
+        
+        # Кнопки
+        btn_frame = ttk.Frame(window)
+        btn_frame.pack(pady=20)
+        
+        def save_settings():
+            self.settings['language'] = lang_var.get()
+            self.settings['theme'] = theme_var.get()
+            self.settings['week_start'] = week_var.get()
+            self.settings['date_format'] = date_var.get()
+            self.settings['time_format'] = time_var.get()
+            self.settings['notifications_enabled'] = notify_enabled.get()
+            self.settings['reminder_before'] = int(reminder_var.get().split()[0])
+            self.settings['sound_notifications'] = sound_enabled.get()
+            self.settings['popup_notifications'] = popup_enabled.get()
+            self.settings['eisenhower_matrix'] = eisenhower_enabled.get()
+            self.settings['pomodoro_enabled'] = pomodoro_enabled.get()
+            self.settings['pomodoro_focus'] = int(focus_var.get())
+            self.settings['pomodoro_break'] = int(break_var.get())
+            
+            self.save_data()
+            messagebox.showinfo("Сохранено", "Настройки сохранены")
+            window.destroy()
+        
+        ttk.Button(btn_frame, text="Сохранить", command=save_settings).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Отмена", command=window.destroy).pack(side=tk.LEFT, padx=10)
 
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = TaskOrganizer(root)
+    root.mainloop()
