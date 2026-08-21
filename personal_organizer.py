@@ -554,6 +554,171 @@ class AddTaskDialog:
         return self.result
 
 
+class SubtaskEditDialog:
+    """
+    Модальный диалог для создания и редактирования подзадач.
+    Окно 400x300 с полями: название, комментарий, чекбокс выполнения.
+    Все поля Entry/Text используют EnhancedEntry/EnhancedText для поддержки Ctrl+C/V/X/A.
+    """
+    
+    def __init__(self, parent, subtask=None, on_save=None):
+        """
+        Инициализация диалога создания/редактирования подзадачи.
+        
+        Args:
+            parent: Родительское окно (для модальности)
+            subtask: Словарь с данными подзадачи для редактирования (None для создания новой)
+            on_save: Callback-функция, вызываемая при успешном сохранении
+        """
+        self.parent = parent
+        self.subtask = subtask  # Подзадача для редактирования или None
+        self.on_save = on_save  # Функция обратного вызова после сохранения
+        self.result = None  # Результат диалога (сохранённая подзадача или None)
+        
+        # Создание модального окна
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Добавление подзадания" if subtask is None else "Редактирование подзадания")
+        self.dialog.geometry("400x300")
+        self.dialog.minsize(350, 250)
+        self.dialog.transient(parent)  # Сделать окном верхнего уровня относительно parent
+        self.dialog.grab_set()  # Модальность - перехват всех событий
+        
+        # Центрирование окна относительно родителя
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - 400) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 300) // 2
+        self.dialog.geometry(f"+{x}+{y}")
+        
+        # Переменная для хранения результата
+        self.saved = False
+        
+        # Создание интерфейса диалога
+        self._create_ui()
+        
+        # Если передана подзадача для редактирования - заполнить поля
+        if self.subtask is not None:
+            self._fill_from_subtask()
+        
+        # Привязка клавиши Enter для сохранения
+        self.dialog.bind('<Return>', lambda e: self._on_save())
+        # Привязка Escape для отмены
+        self.dialog.bind('<Escape>', lambda e: self.dialog.destroy())
+    
+    def _create_ui(self):
+        """
+        Создание интерфейса диалога.
+        Включает все поля ввода: название, комментарий, чекбокс выполнения, кнопки.
+        """
+        # Основной фрейм с отступами
+        main_frame = ttk.Frame(self.dialog, padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # === Поле "Название" (EnhancedEntry) ===
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(title_frame, text="Название:", width=15, anchor=tk.E).pack(side=tk.LEFT)
+        self.title_entry = EnhancedEntry(title_frame, width=30)
+        self.title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # === Поле "Комментарий" (EnhancedText) ===
+        comment_label = ttk.Label(main_frame, text="Комментарий:")
+        comment_label.pack(anchor=tk.W, pady=(5, 0))
+        self.comment_text = EnhancedText(main_frame, height=6, wrap=tk.WORD)
+        self.comment_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # Добавляем скроллбар для текста
+        comment_scrollbar = ttk.Scrollbar(self.comment_text, orient=tk.VERTICAL, command=self.comment_text.yview)
+        comment_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.comment_text.configure(yscrollcommand=comment_scrollbar.set)
+        
+        # === Чекбокс "Выполнено" ===
+        self.completed_var = tk.BooleanVar(value=False)
+        self.completed_check = ttk.Checkbutton(main_frame, text="Выполнено", 
+                                                variable=self.completed_var)
+        self.completed_check.pack(anchor=tk.W, pady=(0, 15))
+        
+        # === Кнопки "Сохранить" / "Отмена" ===
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X)
+        
+        # Кнопка Сохранить
+        self.save_btn = ttk.Button(btn_frame, text="Сохранить", command=self._on_save)
+        self.save_btn.pack(side=tk.RIGHT, padx=5)
+        
+        # Кнопка Отмена
+        cancel_btn = ttk.Button(btn_frame, text="Отмена", command=self.dialog.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=5)
+    
+    def _fill_from_subtask(self):
+        """
+        Заполнение полей диалога данными из подзадачи (режим редактирования).
+        Извлекает все данные подзадачи и устанавливает их в соответствующие поля.
+        """
+        if self.subtask is None:
+            return
+        
+        # Название
+        self.title_entry.delete(0, tk.END)
+        self.title_entry.insert(0, self.subtask.get('title', ''))
+        
+        # Комментарий
+        self.comment_text.delete('1.0', tk.END)
+        self.comment_text.insert('1.0', self.subtask.get('comment', ''))
+        
+        # Выполнено
+        self.completed_var.set(self.subtask.get('completed', False))
+    
+    def _on_save(self):
+        """
+        Обработчик нажатия кнопки "Сохранить".
+        Выполняет валидацию полей и сохраняет результат.
+        Закрывает диалог после успешного сохранения.
+        """
+        # Валидация: название обязательно
+        title = self.title_entry.get().strip()
+        if not title:
+            # Визуальная индикация ошибки
+            self.title_entry.configure(style='Error.TEntry')
+            return
+        
+        # Сбор данных
+        comment = self.comment_text.get('1.0', tk.END).strip()
+        completed = self.completed_var.get()
+        
+        # Создание словаря подзадачи
+        if self.subtask is None:
+            # Создание новой подзадачи
+            new_subtask = {
+                'id': int(datetime.now().timestamp() * 1000),  # Уникальный ID
+                'title': title,
+                'comment': comment,
+                'completed': completed
+            }
+            self.result = new_subtask
+        else:
+            # Обновление существующей подзадачи
+            self.subtask['title'] = title
+            self.subtask['comment'] = comment
+            self.subtask['completed'] = completed
+            self.result = self.subtask
+        
+        # Помечаем как сохранённое и закрываем
+        self.saved = True
+        if self.on_save:
+            self.on_save(self.result)
+        self.dialog.destroy()
+    
+    def wait_for_result(self):
+        """
+        Ожидание закрытия диалога и возврат результата.
+        Блокирует выполнение до закрытия окна.
+        
+        Returns:
+            dict или None: Сохранённая подзадача или None если отменено
+        """
+        self.dialog.wait_window()
+        return self.result
+
+
 class PersonalOrganizerApp:
     """
     Главный класс приложения персонального органайзера.
@@ -874,24 +1039,52 @@ class PersonalOrganizerApp:
         self.description_text.pack(fill=tk.X, pady=5)
         self.description_text.bind('<KeyRelease>', self._on_field_change)
         
-        # Подзадачи
+        # Подзадачи - секция с Treeview
         subtasks_label = ttk.Label(self.details_inner_frame, text="Подзадачи:")
         subtasks_label.pack(anchor=tk.W, pady=(10, 0))
         
         subtasks_container = ttk.Frame(self.details_inner_frame)
         subtasks_container.pack(fill=tk.X, pady=5)
         
-        # Список подзадач
-        self.subtasks_listbox = tk.Listbox(subtasks_container, height=5, selectmode=tk.EXTENDED)
-        self.subtasks_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Контейнер для Treeview подзадач
+        subtasks_tree_frame = ttk.Frame(subtasks_container)
+        subtasks_tree_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Treeview для подзадач: колонки Название | Комментарий | ✓
+        subtask_columns = ('comment', 'completed')
+        self.subtasks_tree = ttk.Treeview(subtasks_tree_frame, columns=subtask_columns, 
+                                           show='headings', height=5)
+        self.subtasks_tree.heading('#0', text='Название', anchor=tk.W)
+        self.subtasks_tree.heading('comment', text='Комментарий', anchor=tk.W)
+        self.subtasks_tree.heading('completed', text='✓', anchor=tk.CENTER)
+        
+        self.subtasks_tree.column('#0', width=200, minwidth=150)
+        self.subtasks_tree.column('comment', width=200, minwidth=100)
+        self.subtasks_tree.column('completed', width=30, minwidth=30)
+        
+        # Скроллбар для дерева подзадач
+        subtasks_scrollbar = ttk.Scrollbar(subtasks_tree_frame, orient=tk.VERTICAL, 
+                                            command=self.subtasks_tree.yview)
+        self.subtasks_tree.configure(yscrollcommand=subtasks_scrollbar.set)
+        
+        self.subtasks_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        subtasks_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Привязка двойного клика для быстрого переключения выполнения
+        self.subtasks_tree.bind('<Double-1>', self._on_subtask_double_click)
         
         # Кнопки управления подзадачами
         subtasks_btn_frame = ttk.Frame(subtasks_container)
         subtasks_btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5)
         
-        ttk.Button(subtasks_btn_frame, text="+", width=3, command=self._add_subtask).pack(pady=1)
-        ttk.Button(subtasks_btn_frame, text="-", width=3, command=self._remove_subtask).pack(pady=1)
-        ttk.Button(subtasks_btn_frame, text="✓", width=3, command=self._complete_subtask).pack(pady=1)
+        ttk.Button(subtasks_btn_frame, text="+", width=3, 
+                   command=self._add_subtask).pack(pady=1)
+        ttk.Button(subtasks_btn_frame, text="✎", width=3, 
+                   command=self._edit_subtask).pack(pady=1)
+        ttk.Button(subtasks_btn_frame, text="-", width=3, 
+                   command=self._remove_subtask).pack(pady=1)
+        ttk.Button(subtasks_btn_frame, text="✓", width=3, 
+                   command=self._toggle_subtask_complete).pack(pady=1)
         
         # Статус создания/изменения
         self.status_label = ttk.Label(self.details_inner_frame, text="", foreground='gray')
@@ -1013,16 +1206,159 @@ class PersonalOrganizerApp:
         pass  # Заглушка для части 1
     
     def _add_subtask(self):
-        """Добавление подзадачи к текущей задаче."""
-        pass  # Заглушка для части 1
+        """
+        Добавление подзадачи к текущей задаче.
+        Открывает диалог SubtaskEditDialog для создания новой подзадачи.
+        После сохранения добавляет подзадачу в список и обновляет отображение.
+        """
+        # Проверяем, есть ли выбранная задача
+        if self.current_task_id is None or self.current_task_id not in self.tasks:
+            return
+        
+        task = self.tasks[self.current_task_id]
+        
+        def on_save(subtask):
+            """Callback после успешного сохранения подзадачи."""
+            if subtask:
+                task.subtasks.append(subtask)
+                self._refresh_subtasks_list()
+                self._save_data()
+        
+        # Создаём и показываем диалог
+        dialog = SubtaskEditDialog(self.root, subtask=None, on_save=on_save)
+        dialog.wait_for_result()
+    
+    def _edit_subtask(self):
+        """
+        Редактирование выбранной подзадачи.
+        Открывает диалог SubtaskEditDialog с данными выбранной подзадачи.
+        После сохранения обновляет список подзадач.
+        """
+        # Проверяем, есть ли выбранная задача
+        if self.current_task_id is None or self.current_task_id not in self.tasks:
+            return
+        
+        task = self.tasks[self.current_task_id]
+        
+        # Получаем выбранную подзадачу из Treeview
+        selected = self.subtasks_tree.selection()
+        if not selected:
+            return
+        
+        # Получаем индекс выбранной подзадачи
+        item_index = self.subtasks_tree.index(selected[0])
+        if item_index < 0 or item_index >= len(task.subtasks):
+            return
+        
+        subtask = task.subtasks[item_index]
+        
+        def on_save(subtask):
+            """Callback после успешного сохранения подзадачи."""
+            if subtask:
+                task.subtasks[item_index] = subtask
+                self._refresh_subtasks_list()
+                self._save_data()
+        
+        # Создаём и показываем диалог с подзадачей для редактирования
+        dialog = SubtaskEditDialog(self.root, subtask=subtask, on_save=on_save)
+        dialog.wait_for_result()
     
     def _remove_subtask(self):
-        """Удаление выбранной подзадачи."""
-        pass  # Заглушка для части 1
+        """
+        Удаление выбранной подзадачи из текущей задачи.
+        Удаляет подзадачу из списка и обновляет отображение.
+        """
+        # Проверяем, есть ли выбранная задача
+        if self.current_task_id is None or self.current_task_id not in self.tasks:
+            return
+        
+        task = self.tasks[self.current_task_id]
+        
+        # Получаем выбранные подзадачи из Treeview
+        selected = self.subtasks_tree.selection()
+        if not selected:
+            return
+        
+        # Получаем индексы выбранных подзадач (в обратном порядке для безопасного удаления)
+        indices = [self.subtasks_tree.index(item) for item in selected]
+        indices.sort(reverse=True)
+        
+        # Удаляем подзадачи по индексам
+        for index in indices:
+            if 0 <= index < len(task.subtasks):
+                del task.subtasks[index]
+        
+        self._refresh_subtasks_list()
+        self._save_data()
     
-    def _complete_subtask(self):
-        """Отметка подзадачи как выполненной."""
-        pass  # Заглушка для части 1
+    def _toggle_subtask_complete(self):
+        """
+        Переключение статуса выполнения выбранной подзадачи.
+        Меняет флаг completed на противоположный и обновляет отображение.
+        """
+        # Проверяем, есть ли выбранная задача
+        if self.current_task_id is None or self.current_task_id not in self.tasks:
+            return
+        
+        task = self.tasks[self.current_task_id]
+        
+        # Получаем выбранную подзадачу из Treeview
+        selected = self.subtasks_tree.selection()
+        if not selected:
+            return
+        
+        # Получаем индекс выбранной подзадачи
+        item_index = self.subtasks_tree.index(selected[0])
+        if item_index < 0 or item_index >= len(task.subtasks):
+            return
+        
+        # Переключаем статус выполнения
+        task.subtasks[item_index]['completed'] = not task.subtasks[item_index].get('completed', False)
+        
+        self._refresh_subtasks_list()
+        self._save_data()
+    
+    def _on_subtask_double_click(self, event):
+        """
+        Обработчик двойного клика по подзадаче.
+        Быстро переключает статус выполнения подзадачи.
+        
+        Args:
+            event: Событие клика мыши
+        """
+        self._toggle_subtask_complete()
+    
+    def _refresh_subtasks_list(self):
+        """
+        Обновление списка подзадач в Treeview.
+        Очищает дерево и заново заполняет его подзадачами из текущей задачи.
+        """
+        # Проверяем, есть ли выбранная задача
+        if self.current_task_id is None or self.current_task_id not in self.tasks:
+            return
+        
+        task = self.tasks[self.current_task_id]
+        
+        # Очищаем дерево
+        for item in self.subtasks_tree.get_children():
+            self.subtasks_tree.delete(item)
+        
+        # Заполняем дерево подзадачами
+        for subtask in task.subtasks:
+            title = subtask.get('title', '')
+            comment = subtask.get('comment', '')
+            completed = subtask.get('completed', False)
+            completed_mark = '✓' if completed else ''
+            
+            # Вставляем подзадачу в дерево
+            item_id = self.subtasks_tree.insert('', tk.END, text=title, 
+                                                 values=(comment, completed_mark))
+            # Помечаем выполненную подзадачу цветом (серым)
+            if completed:
+                self.subtasks_tree.item(item_id, tags=('completed',))
+        
+        # Настраиваем теги для стилизации выполненных подзадач
+        self.subtasks_tree.tag_configure('completed', foreground='gray')
     
     def _on_details_frame_configure(self, event):
         """Обновление области прокрутки при изменении размера фрейма деталей."""
