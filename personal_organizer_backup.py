@@ -1,8 +1,8 @@
-# Персональный органайзер - полное приложение на Python + Tkinter (ttk)
-# Реализует интерфейс согласно organizer_interface_schemas.docx и organizer_interface_schemas.md
+# Персональный органайзер - скелет приложения на Python + Tkinter (ttk)
+# Часть 1: Базовая структура интерфейса, классы-обёртки для полей ввода, модель данных
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk
 from datetime import datetime, timedelta
 import json
 import os
@@ -123,58 +123,41 @@ class Task:
     Используется для хранения и сериализации данных о задачах.
     """
     
-    def __init__(self, id=None, title="", parent_id=None, task_type="Обычная", 
-                 due_date=None, description="", status="Не начата",
-                 importance=3, urgency=3, recurrence="Нет", 
-                 attachments=None, subtasks=None, completed=False, notified=False,
-                 reminder_minutes=0):
+    def __init__(self, id=None, title="", task_type="Обычная", due_date=None, 
+                 description="", completed=False, notified=False, 
+                 reminder_minutes=0, subtasks=None):
         """
         Инициализация задачи с параметрами по умолчанию.
         
         Args:
             id: Уникальный идентификатор задачи (int)
             title: Заголовок задачи (str)
-            parent_id: ID родительской задачи (int или None)
-            task_type: Тип задачи (str)
-            due_date: Дата выполнения (datetime или str в формате YYYY-MM-DD HH:MM)
+            task_type: Тип задачи (str) - "Обычная", "Встреча", "Звонок" и т.д.
+            due_date: Дата выполнения (datetime или str в формате YYYY-MM-DD)
             description: Подробное описание задачи (str)
-            status: Статус задачи (str) - "Не начата", "В процессе", "Завершена", "Отложена"
-            importance: Важность (1-5)
-            urgency: Срочность (1-5)
-            recurrence: Периодичность (str) - "Нет", "Ежедневно", "Еженедельно", "Ежемесячно"
-            attachments: Список вложений (list)
-            subtasks: Список подзадач (list)
             completed: Флаг выполнения (bool)
             notified: Флаг уведомления (bool)
             reminder_minutes: Время напоминания в минутах до события (int)
+            subtasks: Список подзадач (list)
         """
         self.id = id if id is not None else int(datetime.now().timestamp())
         self.title = title
-        self.parent_id = parent_id
         self.task_type = task_type
         # Обработка даты: может быть строкой или datetime объектом
         if isinstance(due_date, str) and due_date:
             try:
-                self.due_date = datetime.strptime(due_date, "%Y-%m-%d %H:%M")
+                self.due_date = datetime.strptime(due_date, "%Y-%m-%d")
             except ValueError:
-                try:
-                    self.due_date = datetime.strptime(due_date, "%Y-%m-%d")
-                except ValueError:
-                    self.due_date = None
+                self.due_date = None
         elif isinstance(due_date, datetime):
             self.due_date = due_date
         else:
             self.due_date = None
         self.description = description
-        self.status = status
-        self.importance = importance  # 1-5
-        self.urgency = urgency  # 1-5
-        self.recurrence = recurrence
-        self.attachments = attachments if attachments is not None else []
-        self.subtasks = subtasks if subtasks is not None else []
         self.completed = completed
         self.notified = notified
         self.reminder_minutes = reminder_minutes
+        self.subtasks = subtasks if subtasks is not None else []
     
     def to_dict(self):
         """
@@ -186,19 +169,13 @@ class Task:
         return {
             'id': self.id,
             'title': self.title,
-            'parent_id': self.parent_id,
             'task_type': self.task_type,
-            'due_date': self.due_date.strftime("%Y-%m-%d %H:%M") if self.due_date else None,
+            'due_date': self.due_date.strftime("%Y-%m-%d") if self.due_date else None,
             'description': self.description,
-            'status': self.status,
-            'importance': self.importance,
-            'urgency': self.urgency,
-            'recurrence': self.recurrence,
-            'attachments': self.attachments,
-            'subtasks': self.subtasks,
             'completed': self.completed,
             'notified': self.notified,
-            'reminder_minutes': self.reminder_minutes
+            'reminder_minutes': self.reminder_minutes,
+            'subtasks': self.subtasks
         }
     
     @classmethod
@@ -215,19 +192,13 @@ class Task:
         return cls(
             id=data.get('id'),
             title=data.get('title', ''),
-            parent_id=data.get('parent_id'),
             task_type=data.get('task_type', 'Обычная'),
             due_date=data.get('due_date'),
             description=data.get('description', ''),
-            status=data.get('status', 'Не начата'),
-            importance=data.get('importance', 3),
-            urgency=data.get('urgency', 3),
-            recurrence=data.get('recurrence', 'Нет'),
-            attachments=data.get('attachments', []),
-            subtasks=data.get('subtasks', []),
             completed=data.get('completed', False),
             notified=data.get('notified', False),
-            reminder_minutes=data.get('reminder_minutes', 0)
+            reminder_minutes=data.get('reminder_minutes', 0),
+            subtasks=data.get('subtasks', [])
         )
     
     def get_status_group(self):
@@ -237,7 +208,7 @@ class Task:
         Returns:
             str: Название группы ("Сегодня", "Скоро", "Позже", "Просрочено", "Выполнено")
         """
-        if self.completed or self.status == "Завершена":
+        if self.completed:
             return "Выполнено"
         
         if self.due_date is None:
@@ -254,22 +225,6 @@ class Task:
             return "Скоро"
         else:
             return "Позже"
-    
-    def get_priority_quadrant(self):
-        """
-        Определяет квадрант матрицы Эйзенхауэра.
-        
-        Returns:
-            str: Название квадранта
-        """
-        if self.urgency >= 3 and self.importance >= 3:
-            return "Срочные и важные"
-        elif self.urgency < 3 and self.importance >= 3:
-            return "Несрочные, но важные"
-        elif self.urgency >= 3 and self.importance < 3:
-            return "Срочные, но не важные"
-        else:
-            return "Несрочные и не важные"
 
 
 class AddTaskDialog:
