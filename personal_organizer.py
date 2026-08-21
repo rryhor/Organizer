@@ -227,6 +227,333 @@ class Task:
             return "Позже"
 
 
+class AddTaskDialog:
+    """
+    Модальный диалог для создания и редактирования задач.
+    Окно 500x600 с полями: тип задачи, название, описание, дата, время, напоминание.
+    Поддерживает режим создания новой задачи и режим редактирования существующей.
+    Все поля Entry/Text используют EnhancedEntry/EnhancedText для поддержки Ctrl+C/V/X/A.
+    """
+    
+    def __init__(self, parent, task=None, on_save=None):
+        """
+        Инициализация диалога создания/редактирования задачи.
+        
+        Args:
+            parent: Родительское окно (для модальности)
+            task: Объект Task для редактирования (None для создания новой)
+            on_save: Callback-функция, вызываемая при успешном сохранении
+        """
+        self.parent = parent
+        self.task = task  # Задача для редактирования или None
+        self.on_save = on_save  # Функция обратного вызова после сохранения
+        self.result = None  # Результат диалога (сохранённая задача или None)
+        
+        # Создание модального окна
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Добавление задачи" if task is None else "Редактирование задачи")
+        self.dialog.geometry("500x600")
+        self.dialog.minsize(450, 550)
+        self.dialog.transient(parent)  # Сделать окном верхнего уровня относительно parent
+        self.dialog.grab_set()  # Модальность - перехват всех событий
+        
+        # Центрирование окна относительно родителя
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - 500) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 600) // 2
+        self.dialog.geometry(f"+{x}+{y}")
+        
+        # Переменная для хранения результата
+        self.saved = False
+        
+        # Создание интерфейса диалога
+        self._create_ui()
+        
+        # Если передана задача для редактирования - заполнить поля
+        if self.task is not None:
+            self._fill_from_task()
+        
+        # Привязка клавиши Enter для сохранения
+        self.dialog.bind('<Return>', lambda e: self._on_save())
+        # Привязка Escape для отмены
+        self.dialog.bind('<Escape>', lambda e: self.dialog.destroy())
+    
+    def _create_ui(self):
+        """
+        Создание интерфейса диалога.
+        Включает все поля ввода, календарь, spinbox времени и напоминания, кнопки.
+        """
+        # Основной фрейм с отступами
+        main_frame = ttk.Frame(self.dialog, padding=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # === Поле "Тип задачи" ===
+        type_frame = ttk.Frame(main_frame)
+        type_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(type_frame, text="Тип задачи:", width=15, anchor=tk.E).pack(side=tk.LEFT)
+        self.type_combo = ttk.Combobox(type_frame, values=[
+            "Встреча", "Мероприятие", "Документы", "Срок сдачи", "Другое"
+        ], state="readonly", width=30)
+        self.type_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.type_combo.set("Другое")  # Значение по умолчанию
+        
+        # === Поле "Название" (EnhancedEntry) ===
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(title_frame, text="Название:", width=15, anchor=tk.E).pack(side=tk.LEFT)
+        self.title_entry = EnhancedEntry(title_frame, width=40)
+        self.title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # === Поле "Описание" (EnhancedText, 4 строки) ===
+        desc_label = ttk.Label(main_frame, text="Описание:")
+        desc_label.pack(anchor=tk.W, pady=(5, 0))
+        self.desc_text = EnhancedText(main_frame, height=4, wrap=tk.WORD)
+        self.desc_text.pack(fill=tk.X, pady=(0, 10))
+        # Добавляем скроллбар для текста
+        desc_scrollbar = ttk.Scrollbar(self.desc_text, orient=tk.VERTICAL, command=self.desc_text.yview)
+        desc_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.desc_text.configure(yscrollcommand=desc_scrollbar.set)
+        
+        # === Календарь (tkcalendar.Calendar) ===
+        cal_label = ttk.Label(main_frame, text="Дата выполнения:")
+        cal_label.pack(anchor=tk.W, pady=(5, 0))
+        
+        if Calendar is not None:
+            # Используем tkcalendar.Calendar
+            self.calendar = Calendar(main_frame, selectmode='day', 
+                                     date_pattern='yyyy-mm-dd', locale='ru_RU')
+            self.calendar.pack(fill=tk.X, pady=(0, 10))
+            # Установка текущей даты по умолчанию
+            self.calendar.selection_clear()
+            today = datetime.now()
+            self.calendar.select_date(today)
+        else:
+            # Fallback: поле ввода даты вручную
+            self.date_entry = EnhancedEntry(main_frame, width=20)
+            self.date_entry.pack(pady=(0, 10))
+            self.date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+            ttk.Label(main_frame, text="(в формате ГГГГ-ММ-ДД)", foreground='gray').pack(anchor=tk.W)
+        
+        # === Spinbox часов (0-23) и минут (0-59) ===
+        time_frame = ttk.Frame(main_frame)
+        time_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(time_frame, text="Время:").pack(side=tk.LEFT)
+        
+        # Часы
+        ttk.Label(time_frame, text="Часы:").pack(side=tk.LEFT, padx=(15, 5))
+        self.hour_spinbox = ttk.Spinbox(time_frame, from_=0, to=23, width=5, 
+                                        format="%02.0f", command=self._validate_time)
+        self.hour_spinbox.pack(side=tk.LEFT)
+        self.hour_spinbox.set(12)  # Полдень по умолчанию
+        
+        # Минуты
+        ttk.Label(time_frame, text="Минуты:").pack(side=tk.LEFT, padx=(10, 5))
+        self.minute_spinbox = ttk.Spinbox(time_frame, from_=0, to=59, width=5, 
+                                          format="%02.0f", command=self._validate_time)
+        self.minute_spinbox.pack(side=tk.LEFT)
+        self.minute_spinbox.set(0)
+        
+        # === Поле "Напомнить за (минут)" (Spinbox, 5-1440, шаг 5) ===
+        reminder_frame = ttk.Frame(main_frame)
+        reminder_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(reminder_frame, text="Напомнить за:", width=15, anchor=tk.E).pack(side=tk.LEFT)
+        self.reminder_spinbox = ttk.Spinbox(reminder_frame, from_=5, to=1440, width=10, 
+                                            increment=5, command=self._validate_reminder)
+        self.reminder_spinbox.pack(side=tk.LEFT, padx=5)
+        self.reminder_spinbox.set(15)  # 15 минут по умолчанию
+        ttk.Label(reminder_frame, text="минут до события").pack(side=tk.LEFT)
+        
+        # === Разделитель ===
+        separator = ttk.Separator(main_frame, orient=tk.HORIZONTAL)
+        separator.pack(fill=tk.X, pady=15)
+        
+        # === Кнопки "Сохранить" / "Отмена" ===
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Кнопка Сохранить
+        self.save_btn = ttk.Button(btn_frame, text="Сохранить", command=self._on_save)
+        self.save_btn.pack(side=tk.RIGHT, padx=5)
+        
+        # Кнопка Отмена
+        cancel_btn = ttk.Button(btn_frame, text="Отмена", command=self.dialog.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=5)
+    
+    def _fill_from_task(self):
+        """
+        Заполнение полей диалога данными из объекта Task (режим редактирования).
+        Извлекает все данные задачи и устанавливает их в соответствующие поля.
+        """
+        if self.task is None:
+            return
+        
+        # Тип задачи
+        if self.task.task_type in ["Встреча", "Мероприятие", "Документы", "Срок сдачи", "Другое"]:
+            self.type_combo.set(self.task.task_type)
+        else:
+            self.type_combo.set("Другое")
+        
+        # Название
+        self.title_entry.delete(0, tk.END)
+        self.title_entry.insert(0, self.task.title)
+        
+        # Описание
+        self.desc_text.delete('1.0', tk.END)
+        self.desc_text.insert('1.0', self.task.description)
+        
+        # Дата и время
+        if self.task.due_date:
+            due_dt = self.task.due_date if isinstance(self.task.due_date, datetime) else \
+                     datetime.strptime(self.task.due_date, "%Y-%m-%d")
+            
+            if Calendar is not None:
+                self.calendar.select_date(due_dt)
+            else:
+                self.date_entry.delete(0, tk.END)
+                self.date_entry.insert(0, due_dt.strftime("%Y-%m-%d"))
+            
+            # Время
+            self.hour_spinbox.set(due_dt.hour)
+            self.minute_spinbox.set(due_dt.minute)
+        
+        # Напоминание
+        if self.task.reminder_minutes and self.task.reminder_minutes >= 5:
+            self.reminder_spinbox.set(self.task.reminder_minutes)
+        else:
+            self.reminder_spinbox.set(15)
+    
+    def _validate_time(self):
+        """
+        Валидация введённого времени.
+        Проверяет корректность значений часов (0-23) и минут (0-59).
+        """
+        try:
+            hour = int(self.hour_spinbox.get())
+            minute = int(self.minute_spinbox.get())
+            if hour < 0 or hour > 23:
+                self.hour_spinbox.set(12)
+            if minute < 0 or minute > 59:
+                self.minute_spinbox.set(0)
+        except ValueError:
+            self.hour_spinbox.set(12)
+            self.minute_spinbox.set(0)
+    
+    def _validate_reminder(self):
+        """
+        Валидация значения напоминания.
+        Проверяет, что значение в диапазоне 5-1440 минут.
+        """
+        try:
+            reminder = int(self.reminder_spinbox.get())
+            if reminder < 5:
+                self.reminder_spinbox.set(5)
+            elif reminder > 1440:
+                self.reminder_spinbox.set(1440)
+        except ValueError:
+            self.reminder_spinbox.set(15)
+    
+    def _on_save(self):
+        """
+        Обработчик нажатия кнопки "Сохранить".
+        Выполняет валидацию полей, создаёт/обновляет объект Task и закрывает диалог.
+        """
+        # Валидация: название обязательно
+        title = self.title_entry.get().strip()
+        if not title:
+            # Показываем сообщение об ошибке
+            error_dialog = tk.Toplevel(self.dialog)
+            error_dialog.title("Ошибка")
+            error_dialog.geometry("300x100")
+            error_dialog.transient(self.dialog)
+            error_dialog.grab_set()
+            ttk.Label(error_dialog, text="Название задачи обязательно!", 
+                     foreground='red').pack(pady=20)
+            ttk.Button(error_dialog, text="OK", command=error_dialog.destroy).pack()
+            # Центрирование
+            error_dialog.update_idletasks()
+            x = self.dialog.winfo_x() + (500 - 300) // 2
+            y = self.dialog.winfo_y() + (600 - 100) // 2
+            error_dialog.geometry(f"+{x}+{y}")
+            return
+        
+        # Валидация даты
+        try:
+            if Calendar is not None:
+                date_str = self.calendar.get_date()
+                due_date = datetime.strptime(date_str, "%Y-%m-%d")
+            else:
+                date_str = self.date_entry.get().strip()
+                due_date = datetime.strptime(date_str, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            # Показываем сообщение об ошибке
+            error_dialog = tk.Toplevel(self.dialog)
+            error_dialog.title("Ошибка")
+            error_dialog.geometry("300x100")
+            error_dialog.transient(self.dialog)
+            error_dialog.grab_set()
+            ttk.Label(error_dialog, text="Некорректная дата!", foreground='red').pack(pady=20)
+            ttk.Button(error_dialog, text="OK", command=error_dialog.destroy).pack()
+            error_dialog.update_idletasks()
+            x = self.dialog.winfo_x() + (500 - 300) // 2
+            y = self.dialog.winfo_y() + (600 - 100) // 2
+            error_dialog.geometry(f"+{x}+{y}")
+            return
+        
+        # Сбор времени
+        try:
+            hour = int(self.hour_spinbox.get())
+            minute = int(self.minute_spinbox.get())
+            due_datetime = due_date.replace(hour=hour, minute=minute)
+        except ValueError:
+            due_datetime = due_date
+        
+        # Сбор данных
+        task_type = self.type_combo.get()
+        description = self.desc_text.get('1.0', tk.END).strip()
+        reminder_minutes = int(self.reminder_spinbox.get())
+        
+        # Создание или обновление объекта Task
+        if self.task is None:
+            # Создание новой задачи
+            new_task = Task(
+                id=int(datetime.now().timestamp()),
+                title=title,
+                task_type=task_type,
+                due_date=due_datetime,
+                description=description,
+                completed=False,
+                notified=False,
+                reminder_minutes=reminder_minutes,
+                subtasks=[]
+            )
+            self.result = new_task
+        else:
+            # Обновление существующей задачи
+            self.task.title = title
+            self.task.task_type = task_type
+            self.task.due_date = due_datetime
+            self.task.description = description
+            self.task.reminder_minutes = reminder_minutes
+            self.result = self.task
+        
+        # Помечаем как сохранённое и закрываем
+        self.saved = True
+        if self.on_save:
+            self.on_save(self.result)
+        self.dialog.destroy()
+    
+    def wait_for_result(self):
+        """
+        Ожидание закрытия диалога и возврат результата.
+        Блокирует выполнение до закрытия окна.
+        
+        Returns:
+            Task или None: Сохранённая задача или None если отменено
+        """
+        self.dialog.wait_window()
+        return self.result
+
+
 class PersonalOrganizerApp:
     """
     Главный класс приложения персонального органайзера.
@@ -611,12 +938,45 @@ class PersonalOrganizerApp:
         pass  # Заглушка для части 1
     
     def _add_task(self):
-        """Создание новой задачи (открытие диалога в части 2)."""
-        pass  # Заглушка для части 1
+        """
+        Создание новой задачи через диалог AddTaskDialog.
+        Открывает модальное окно для ввода данных задачи.
+        После сохранения добавляет задачу в хранилище и обновляет дерево.
+        """
+        def on_save(task):
+            """Callback после успешного сохранения задачи."""
+            if task:
+                self.tasks[task.id] = task
+                self._refresh_task_tree()
+                self._save_data()
+        
+        # Создаём и показываем диалог
+        dialog = AddTaskDialog(self.root, task=None, on_save=on_save)
+        dialog.wait_for_result()
     
     def _edit_task(self):
-        """Редактирование выбранной задачи (открытие диалога в части 2)."""
-        pass  # Заглушка для части 1
+        """
+        Редактирование выбранной задачи через диалог AddTaskDialog.
+        Открывает модальное окно с заполненными полями текущей задачи.
+        После сохранения обновляет данные и дерево задач.
+        """
+        # Проверяем, есть ли выбранная задача
+        if self.current_task_id is None or self.current_task_id not in self.tasks:
+            return
+        
+        task = self.tasks[self.current_task_id]
+        
+        def on_save(task):
+            """Callback после успешного сохранения задачи."""
+            if task:
+                self.tasks[task.id] = task
+                self._refresh_task_tree()
+                self._show_details()  # Обновить отображение деталей
+                self._save_data()
+        
+        # Создаём и показываем диалог с задачей для редактирования
+        dialog = AddTaskDialog(self.root, task=task, on_save=on_save)
+        dialog.wait_for_result()
     
     def _delete_task(self):
         """Удаление выбранной задачи."""
