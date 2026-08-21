@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1787222250204,
+    "title": "Отчетность",
+    "task_type": "Срок сдачи",
+    "due_date": "2026-08-20 13:00",
+    "description": "Сдать отчеты Лене",
+    "completed": false,
+    "notified": false,
+    "subtasks": [
+      {
+        "id": 1787222275285,
+        "title": "Отчет за 2025 год",
+        "completed": false
+      },
+      {
+        "id": 1787222311571,
+        "title": "Отчет за 2021-2025 годы",
+        "completed": false
+      }
+    ]
+  }
+]
